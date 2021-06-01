@@ -24,8 +24,9 @@ import org.apache.rocketmq.remoting.common.RemotingHelper;
 
 public class Producer {
     public static void main(String[] args) throws MQClientException, InterruptedException {
-
+        String nameServer = "localhost:9876";
         DefaultMQProducer producer = new DefaultMQProducer("ProducerGroupName");
+        producer.setNamesrvAddr(nameServer);
         producer.start();
 
         for (int i = 0; i < 128; i++)
