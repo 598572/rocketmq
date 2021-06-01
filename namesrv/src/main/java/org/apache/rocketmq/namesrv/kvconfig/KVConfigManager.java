@@ -44,7 +44,11 @@ public class KVConfigManager {
     public void load() {
         String content = null;
         try {
+            /**
+             * 把 kvConfig.json  文件转成String? 666
+             */
             content = MixAll.file2String(this.namesrvController.getNamesrvConfig().getKvConfigPath());
+            log.info("load kvConfig.json  path:{},result:{}",this.namesrvController.getNamesrvConfig().getKvConfigPath(),content);
         } catch (IOException e) {
             log.warn("Load KV config table exception", e);
         }
@@ -52,6 +56,7 @@ public class KVConfigManager {
             KVConfigSerializeWrapper kvConfigSerializeWrapper =
                 KVConfigSerializeWrapper.fromJson(content, KVConfigSerializeWrapper.class);
             if (null != kvConfigSerializeWrapper) {
+                //添加进配置列表中
                 this.configTable.putAll(kvConfigSerializeWrapper.getConfigTable());
                 log.info("load KV config table OK");
             }

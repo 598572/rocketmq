@@ -38,6 +38,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicLong;
+
+import com.alibaba.fastjson.JSON;
 import org.apache.rocketmq.common.annotation.ImportantField;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.common.help.FAQUrl;
@@ -228,11 +230,27 @@ public class MixAll {
         printObjectProperties(logger, object, false);
     }
 
+    public static void main(String[] args) {
+        Integer c = new Integer(1);
+        Class cls = c.getClass();
+        int i = cls.getModifiers();
+        String retval = Modifier.toString(i);
+        System.out.println("Class Modifier = " + retval);//Class Modifier = public final
+    }
+
+    /**
+     * 打印log
+     * @param logger
+     * @param object
+     * @param onlyImportantField
+     */
     public static void printObjectProperties(final InternalLogger logger, final Object object,
         final boolean onlyImportantField) {
+        //获取所有字段
         Field[] fields = object.getClass().getDeclaredFields();
         for (Field field : fields) {
-            if (!Modifier.isStatic(field.getModifiers())) {
+            //如果不是静态属性的
+            if (!Modifier.isStatic(field.getModifiers())) {//field.getModifiers() 此方法返回一个表示这个类修饰符的整数。
                 String name = field.getName();
                 if (!name.startsWith("this")) {
                     Object value = null;
@@ -311,18 +329,27 @@ public class MixAll {
         return properties;
     }
 
+    /**
+     * 为目标对象赋值通过 配置对象
+     * @param p
+     * @param object
+     */
     public static void properties2Object(final Properties p, final Object object) {
         Method[] methods = object.getClass().getMethods();
         for (Method method : methods) {
             String mn = method.getName();
             if (mn.startsWith("set")) {
                 try {
+                    // 比如方法名 setName()
                     String tmp = mn.substring(4);
                     String first = mn.substring(3, 4);
-
-                    String key = first.toLowerCase() + tmp;
+                    log.info("properties2Object tmp:{},first:{}", tmp,first);
+                    String key = first.toLowerCase() + tmp;//前缀 转小写
+                    //获取配置文件内容
                     String property = p.getProperty(key);
                     if (property != null) {
+                        log.info("property 不是空 准备赋值操作 property:{}", JSON.toJSONString(property));
+                        // 获取值，并进行相应的类型转换
                         Class<?>[] pt = method.getParameterTypes();
                         if (pt != null && pt.length > 0) {
                             String cn = pt[0].getSimpleName();
@@ -342,10 +369,14 @@ public class MixAll {
                             } else {
                                 continue;
                             }
+                            //反射set值
                             method.invoke(object, arg);
                         }
+                    }else {
+                        log.info("property 是空  property:{}", JSON.toJSONString(property));
                     }
                 } catch (Throwable ignored) {
+                    //直接把异常吞了？好吧
                 }
             }
         }

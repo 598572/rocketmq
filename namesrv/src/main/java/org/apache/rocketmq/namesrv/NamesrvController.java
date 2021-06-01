@@ -74,16 +74,16 @@ public class NamesrvController {
     }
 
     public boolean initialize() {
-
+        // 加载 kv 配置
         this.kvConfigManager.load();
-
+        //Netty远程服务 yes  netty牛逼 牛逼netty
         this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.brokerHousekeepingService);
-
+        //创建个固定数量的线程池 非核心和核心数量都是 8个
         this.remotingExecutor =
             Executors.newFixedThreadPool(nettyServerConfig.getServerWorkerThreads(), new ThreadFactoryImpl("RemotingExecutorThread_"));
-
+        //注册默认请求处理器
         this.registerProcessor();
-
+        // 开启定时任务，每隔10s扫描一次broker，首次延迟5秒执行 移除不活跃的broker 关于 scheduleAtFixedRate  ===>>> https://developer.aliyun.com/article/744977
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -92,6 +92,7 @@ public class NamesrvController {
             }
         }, 5, 10, TimeUnit.SECONDS);
 
+        //定期打印 KV配置 里边用的 ReentrantReadWriteLock 读写锁
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -99,7 +100,7 @@ public class NamesrvController {
                 NamesrvController.this.kvConfigManager.printAllPeriodically();
             }
         }, 1, 10, TimeUnit.MINUTES);
-
+        //安全相关
         if (TlsSystemConfig.tlsMode != TlsMode.DISABLED) {
             // Register a listener to reload SslContext
             try {
@@ -141,13 +142,18 @@ public class NamesrvController {
         return true;
     }
 
+    /**
+     * 注册默认请求处理器
+     */
     private void registerProcessor() {
+        //是测试节点？
         if (namesrvConfig.isClusterTest()) {
 
             this.remotingServer.registerDefaultProcessor(new ClusterTestRequestProcessor(this, namesrvConfig.getProductEnvName()),
                 this.remotingExecutor);
         } else {
-
+            //不是测试节点 注册 remotingExecutor 到 DefaultRequestProcessor 最终是个这个  Pair<NettyRequestProcessor, ExecutorService>
+            //而其中 NettyRequestProcessor(默认请求处理器)的属性之一就是这里传入的namesrvController 即 this
             this.remotingServer.registerDefaultProcessor(new DefaultRequestProcessor(this), this.remotingExecutor);
         }
     }

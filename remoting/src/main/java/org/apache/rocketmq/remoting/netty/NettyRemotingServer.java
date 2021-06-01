@@ -93,9 +93,15 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         this(nettyServerConfig, null);
     }
 
+    /**
+     * netty远程服务端
+     * @param nettyServerConfig
+     * @param channelEventListener
+     */
     public NettyRemotingServer(final NettyServerConfig nettyServerConfig,
         final ChannelEventListener channelEventListener) {
         super(nettyServerConfig.getServerOnewaySemaphoreValue(), nettyServerConfig.getServerAsyncSemaphoreValue());
+        //初始化 netty服务端启动类
         this.serverBootstrap = new ServerBootstrap();
         this.nettyServerConfig = nettyServerConfig;
         this.channelEventListener = channelEventListener;
@@ -115,6 +121,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         });
 
         if (useEpoll()) {
+            //netty用来处理连接事件与读写事件的线程
             this.eventLoopGroupBoss = new EpollEventLoopGroup(1, new ThreadFactory() {
                 private AtomicInteger threadIndex = new AtomicInteger(0);
 
@@ -204,6 +211,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                 .childOption(ChannelOption.TCP_NODELAY, true)
                 .childOption(ChannelOption.SO_SNDBUF, nettyServerConfig.getServerSocketSndBufSize())
                 .childOption(ChannelOption.SO_RCVBUF, nettyServerConfig.getServerSocketRcvBufSize())
+                    //监听端口
                 .localAddress(new InetSocketAddress(this.nettyServerConfig.getListenPort()))
                 .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
@@ -215,10 +223,20 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                                 new NettyDecoder(),
                                 new IdleStateHandler(0, 0, nettyServerConfig.getServerChannelMaxIdleTimeSeconds()),
                                 connectionManageHandler,
-                                serverHandler
+                                //netty用来处理连接事件与读写事件的线程
+                                    serverHandler
                             );
                     }
                 });
+        /**
+         * handshakeHandler：处理握手操作，用来判断tls的开启状态
+         * encoder/NettyDecoder：处理报文的编解码操作
+         * IdleStateHandler：处理心跳
+         * connectionManageHandler：处理连接请求
+         * serverHandler：处理读写请求
+         *
+         * 这里的ChannelInitializer 来初始化 ChannelHandler， ChannelHandler 作用： 处理broker注册消息 producer/consumer 生产/消费 消息
+         */
 
         if (nettyServerConfig.isServerPooledByteBufAllocatorEnable()) {
             childHandler.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
