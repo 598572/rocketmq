@@ -100,6 +100,7 @@ public class RegisterBrokerBody extends RemotingSerializable {
             return RegisterBrokerBody.decode(data, RegisterBrokerBody.class);
         }
         long start = System.currentTimeMillis();
+        //可以看到 对body体  使用了 压缩算法  https://www.apiref.com/java11-zh/java.base/java/util/zip/InflaterInputStream.html
         InflaterInputStream inflaterInputStream = new InflaterInputStream(new ByteArrayInputStream(data));
         int dataVersionLength = readInt(inflaterInputStream);
         byte[] dataVersionBytes = readBytes(inflaterInputStream, dataVersionLength);

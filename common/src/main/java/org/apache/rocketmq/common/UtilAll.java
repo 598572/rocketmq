@@ -239,6 +239,13 @@ public class UtilAll {
         return 0;
     }
 
+    /**
+     * 这是在干啥 ？？？？？？？一番查找后 大概了解  类似MD5生成一个唯一值 。 （据说理论上可能不唯一）
+     * @param array
+     * @param offset
+     * @param length
+     * @return
+     */
     public static int crc32(byte[] array, int offset, int length) {
         CRC32 crc32 = new CRC32();
         crc32.update(array, offset, length);

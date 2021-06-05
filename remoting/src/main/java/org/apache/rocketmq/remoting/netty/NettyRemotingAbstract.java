@@ -16,6 +16,7 @@
  */
 package org.apache.rocketmq.remoting.netty;
 
+import com.alibaba.fastjson.JSON;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -89,6 +90,9 @@ public abstract class NettyRemotingAbstract {
 
     /**
      * The default request processor to use in case there is no exact match in {@link #processorTable} per request code.
+     *
+     * 如果每一个code 在 {@link #processorTable} 中没有完全匹配时使用的默认请求处理器。
+     *
      */
     protected Pair<NettyRequestProcessor, ExecutorService> defaultRequestProcessor;
 
@@ -135,14 +139,14 @@ public abstract class NettyRemotingAbstract {
     }
 
     /**
-     * Entry of incoming command processing.
+     * Entry of incoming command processing. 传入命令处理的入口 包括request 和response 。 这个方法是netty服务器的
      *
      * <p>
      * <strong>Note:</strong>
      * The incoming remoting command may be
      * <ul>
-     * <li>An inquiry request from a remote peer component;</li>
-     * <li>A response to a previous request issued by this very participant.</li>
+     * <li>An inquiry request from a remote peer component;</li>  来自远程对等组件的查询请求  broker
+     * <li>A response to a previous request issued by this very participant.</li>  对此参与者发出的先前请求的响应。
      * </ul>
      * </p>
      *
@@ -155,9 +159,13 @@ public abstract class NettyRemotingAbstract {
         if (cmd != null) {
             switch (cmd.getType()) {
                 case REQUEST_COMMAND:
+                    //请求类型
+                    log.info(" processRequestCommand processMessageReceived ChannelHandlerContext:{} RemotingCommand:{}", JSON.toJSONString(ctx),JSON.toJSONString(msg));
                     processRequestCommand(ctx, cmd);
                     break;
                 case RESPONSE_COMMAND:
+                    //响应类型的请求
+                    log.info(" processResponseCommand processMessageReceived ChannelHandlerContext:{} RemotingCommand:{}", JSON.toJSONString(ctx),JSON.toJSONString(msg));
                     processResponseCommand(ctx, cmd);
                     break;
                 default:
@@ -184,17 +192,48 @@ public abstract class NettyRemotingAbstract {
 
 
     /**
-     * Process incoming request command issued by remote peer.
+     * Process incoming request command issued by remote peer. 处理远程对等方发出的传入请求命令。
      *
      * @param ctx channel handler context.
      * @param cmd request command.
      */
     public void processRequestCommand(final ChannelHandlerContext ctx, final RemotingCommand cmd) {
+        //获取netty请求处理器 如果是null  默认 defaultRequestProcessor 这个处理器
         final Pair<NettyRequestProcessor, ExecutorService> matched = this.processorTable.get(cmd.getCode());
+        // defaultRequestProcessor 这个处理器是不是在哪里见过？ 没错 他是在 NamesrvController 类中的 registerProcessor
+        // 方法注册的 这货挺重要的 他是在 NamesrvController  initialize 方法中初始化的 不记得了？回去看看代码吧
+
+
+
+        /*
+         NamesrvController registerProcessor  方法摘要 :
+
+             private void registerProcessor() {
+                //是测试节点？
+                if (namesrvConfig.isClusterTest()) {
+
+                    this.remotingServer.registerDefaultProcessor(new ClusterTestRequestProcessor(this, namesrvConfig.getProductEnvName()),
+                        this.remotingExecutor);
+                } else {
+                    //不是测试节点 注册 remotingExecutor 到 DefaultRequestProcessor 最终是个这个  Pair<NettyRequestProcessor, ExecutorService>
+                    //而其中 NettyRequestProcessor(默认请求处理器)的属性之一就是这里传入的namesrvController 即 this
+                    this.remotingServer.registerDefaultProcessor(new DefaultRequestProcessor(this), this.remotingExecutor);
+                }
+             }
+
+         NettyRemotingServer（实现了remotingServer接口）（也就是上边 this.remotingServer  ） 的 registerDefaultProcessor方法：
+
+            @Override
+            public void registerDefaultProcessor(NettyRequestProcessor processor, ExecutorService executor) {
+                this.defaultRequestProcessor = new Pair<NettyRequestProcessor, ExecutorService>(processor, executor);
+            }
+
+         */
         final Pair<NettyRequestProcessor, ExecutorService> pair = null == matched ? this.defaultRequestProcessor : matched;
         final int opaque = cmd.getOpaque();
 
         if (pair != null) {
+            //创建个
             Runnable run = new Runnable() {
                 @Override
                 public void run() {
@@ -203,6 +242,7 @@ public abstract class NettyRemotingAbstract {
                         final RemotingResponseCallback callback = new RemotingResponseCallback() {
                             @Override
                             public void callback(RemotingCommand response) {
+                                //回调之前注册钩子？舍意思 没看懂这里 TODO 黄壮壮
                                 doAfterRpcHooks(RemotingHelper.parseChannelRemoteAddr(ctx.channel()), cmd, response);
                                 if (!cmd.isOnewayRPC()) {
                                     if (response != null) {
@@ -220,10 +260,13 @@ public abstract class NettyRemotingAbstract {
                                 }
                             }
                         };
+                        //真正处理请求的方法 异步或者同步  两种方式 同一种用途 ， 他(Runnable) 最终会被pair的value  （pair.getObject2()） 也就是 线程池执行
+                        //是异步的请求类型 就按异步处理 进入asyncProcessRequest方法可以看到异步是用 CompletableFuture 实现的 是时候膜拜一下了 嘿嘿
                         if (pair.getObject1() instanceof AsyncNettyRequestProcessor) {
                             AsyncNettyRequestProcessor processor = (AsyncNettyRequestProcessor)pair.getObject1();
                             processor.asyncProcessRequest(ctx, cmd, callback);
                         } else {
+                            //不是异步就是同步喽
                             NettyRequestProcessor processor = pair.getObject1();
                             RemotingCommand response = processor.processRequest(ctx, cmd);
                             callback.callback(response);
@@ -231,7 +274,7 @@ public abstract class NettyRemotingAbstract {
                     } catch (Throwable e) {
                         log.error("process request exception", e);
                         log.error(cmd.toString());
-
+                        //
                         if (!cmd.isOnewayRPC()) {
                             final RemotingCommand response = RemotingCommand.createResponseCommand(RemotingSysResponseCode.SYSTEM_ERROR,
                                 RemotingHelper.exceptionSimpleDesc(e));
@@ -241,7 +284,7 @@ public abstract class NettyRemotingAbstract {
                     }
                 }
             };
-
+            // 拒绝请求的话  返回系统忙
             if (pair.getObject1().rejectRequest()) {
                 final RemotingCommand response = RemotingCommand.createResponseCommand(RemotingSysResponseCode.SYSTEM_BUSY,
                     "[REJECTREQUEST]system busy, start flow control for a while");
@@ -251,9 +294,12 @@ public abstract class NettyRemotingAbstract {
             }
 
             try {
+                //封装了 runnable 对象
                 final RequestTask requestTask = new RequestTask(run, ctx.channel(), cmd);
+                //提交任务到线程池 并且需要返回结果
                 pair.getObject2().submit(requestTask);
             } catch (RejectedExecutionException e) {
+                //线程池执行拒绝策略后打印日志
                 if ((System.currentTimeMillis() % 10000) == 0) {
                     log.warn(RemotingHelper.parseChannelRemoteAddr(ctx.channel())
                         + ", too many requests and system thread pool busy, RejectedExecutionException "
@@ -269,6 +315,7 @@ public abstract class NettyRemotingAbstract {
                 }
             }
         } else {
+            //没找到处理器 返回错误信息并打印log
             String error = " request type " + cmd.getCode() + " not supported";
             final RemotingCommand response =
                 RemotingCommand.createResponseCommand(RemotingSysResponseCode.REQUEST_CODE_NOT_SUPPORTED, error);

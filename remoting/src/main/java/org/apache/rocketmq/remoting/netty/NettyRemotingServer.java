@@ -378,6 +378,12 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
             this.tlsMode = tlsMode;
         }
 
+        /**
+         * 处理Broker/Producer/Consumer的消息
+         * @param ctx
+         * @param msg
+         * @throws Exception
+         */
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, ByteBuf msg) throws Exception {
 
@@ -430,11 +436,21 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         }
     }
 
+    /**
+     * NettyServerHandler 中文直译  ： netty服务器管理者  ***
+     * 该类是 NettyRemotingServer 的内部类 channelRead0 调用方法是
+     * NettyRemotingAbstract 抽象类的 processMessageReceived 方法
+     *
+     *
+     * 处理Broker/Producer/Consumer消息 注意这个方法是 nameServer处理消息的入口 重要 ****
+     */
     @ChannelHandler.Sharable
     class NettyServerHandler extends SimpleChannelInboundHandler<RemotingCommand> {
 
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, RemotingCommand msg) throws Exception {
+            //调用抽象类的方法  因为这个方法在server和client都用到了 抽取到父类中了
+            //调用抽象类的方法 处理请求
             processMessageReceived(ctx, msg);
         }
     }

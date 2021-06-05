@@ -18,7 +18,10 @@ package org.apache.rocketmq.namesrv.processor;
 
 import io.netty.channel.ChannelHandlerContext;
 import java.io.UnsupportedEncodingException;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.rocketmq.common.DataVersion;
 import org.apache.rocketmq.common.MQVersion;
@@ -27,6 +30,8 @@ import org.apache.rocketmq.common.MixAll;
 import org.apache.rocketmq.common.UtilAll;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.common.help.FAQUrl;
+import org.apache.rocketmq.common.protocol.route.BrokerData;
+import org.apache.rocketmq.common.protocol.route.QueueData;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.common.namesrv.NamesrvUtil;
@@ -52,6 +57,7 @@ import org.apache.rocketmq.common.protocol.header.namesrv.WipeWritePermOfBrokerR
 import org.apache.rocketmq.common.protocol.header.namesrv.WipeWritePermOfBrokerResponseHeader;
 import org.apache.rocketmq.common.protocol.route.TopicRouteData;
 import org.apache.rocketmq.namesrv.NamesrvController;
+import org.apache.rocketmq.namesrv.routeinfo.BrokerLiveInfo;
 import org.apache.rocketmq.remoting.common.RemotingHelper;
 import org.apache.rocketmq.remoting.exception.RemotingCommandException;
 import org.apache.rocketmq.remoting.netty.AsyncNettyRequestProcessor;
@@ -67,6 +73,14 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
         this.namesrvController = namesrvController;
     }
 
+    /**
+     * 默认请求处理器（DefaultRequestProcessor）的处理方式
+     *
+     * @param ctx
+     * @param request
+     * @return
+     * @throws RemotingCommandException
+     */
     @Override
     public RemotingCommand processRequest(ChannelHandlerContext ctx,
         RemotingCommand request) throws RemotingCommandException {
@@ -78,28 +92,38 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
                 request);
         }
 
+        //根据code执行不同的处理 switch case 大法好 哈哈。
+        //case后变量名起的见名知意 就不翻译了
 
         switch (request.getCode()) {
+
             case RequestCode.PUT_KV_CONFIG:
                 return this.putKVConfig(ctx, request);
             case RequestCode.GET_KV_CONFIG:
                 return this.getKVConfig(ctx, request);
             case RequestCode.DELETE_KV_CONFIG:
+                //删除KVConfig
                 return this.deleteKVConfig(ctx, request);
             case RequestCode.QUERY_DATA_VERSION:
+                //查询dataVersion
                 return queryBrokerTopicConfig(ctx, request);
             case RequestCode.REGISTER_BROKER:
+                //注册broker
                 Version brokerVersion = MQVersion.value2Version(request.getVersion());
                 if (brokerVersion.ordinal() >= MQVersion.Version.V3_0_11.ordinal()) {
+                    //大于V3_0_11版本执行这个方法
                     return this.registerBrokerWithFilterServer(ctx, request);
                 } else {
                     return this.registerBroker(ctx, request);
                 }
             case RequestCode.UNREGISTER_BROKER:
+                //注销broker
                 return this.unregisterBroker(ctx, request);
             case RequestCode.GET_ROUTEINFO_BY_TOPIC:
+                //获得路由信息根据topic
                 return this.getRouteInfoByTopic(ctx, request);
             case RequestCode.GET_BROKER_CLUSTER_INFO:
+                //获取broker节点信息 下边的就略了 变量名起的很好
                 return this.getBrokerClusterInfo(ctx, request);
             case RequestCode.WIPE_WRITE_PERM_OF_BROKER:
                 return this.wipeWritePermOfBroker(ctx, request);
@@ -198,25 +222,41 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
         final RegisterBrokerRequestHeader requestHeader =
             (RegisterBrokerRequestHeader) request.decodeCommandCustomHeader(RegisterBrokerRequestHeader.class);
 
+        // 使用 crc32校验消息是否重复
+        // 参考 ： https://help.aliyun.com/document_detail/29548.html
+        // 消息ID和crc32id主要是用来防止消息重复。
+        // 如果业务本身是幂等的，可以忽略，否则需要利用msgId或crc32Id来做幂等。
+        // 如果要求消息绝对不重复，推荐做法是对消息体使用crc32或MD5来防止重复消息。
         if (!checksum(ctx, request, requestHeader)) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark("crc32 not match");
             return response;
         }
-
+        //RegisterBrokerBody 这个类负责对  (注册）broker的信息(body) 进行压缩和解压缩 使用了哈夫曼算法 666
         RegisterBrokerBody registerBrokerBody = new RegisterBrokerBody();
 
         if (request.getBody() != null) {
             try {
+                //解码(解压缩)
                 registerBrokerBody = RegisterBrokerBody.decode(request.getBody(), requestHeader.isCompressed());
             } catch (Exception e) {
                 throw new RemotingCommandException("Failed to decode RegisterBrokerBody", e);
             }
         } else {
+            //没有注册过 设置DataVersion为0 人用的 AtomicLong做的计数器  瞅瞅 时刻都在注意并发情况 干掉 i++ 从 AtomicXxx 开始
             registerBrokerBody.getTopicConfigSerializeWrapper().getDataVersion().setCounter(new AtomicLong(0));
             registerBrokerBody.getTopicConfigSerializeWrapper().getDataVersion().setTimestamp(0);
         }
+        //开始进行真正的注册broker信息 点进去可以看到 其实就是往  namesrvController实例中的 RouteInfoManager 中的这几个变量设置值
+        //========******======= 莫小看这几个变量 他们可是NameServer管理 broker topic cluster的关键啊========******===========
 
+        // private final HashMap<String/* topic */,List<QueueData>> topicQueueTable;
+        // private final HashMap<String/* brokerName */, BrokerData> brokerAddrTable;
+        //private final HashMap<String/* clusterName */, Set<String/* brokerName */>> clusterAddrTable;
+        //private final HashMap<String/* brokerAddr */, BrokerLiveInfo> brokerLiveTable;
+        //private final HashMap<String/* brokerAddr */, List<String>/* Filter Server */> filterServerTable;
+
+        //从namesrvController拿到RouteInfoManager 进行broker的注册 重点来了=================== 其实就是赋值啦 哈哈
         RegisterBrokerResult result = this.namesrvController.getRouteInfoManager().registerBroker(
             requestHeader.getClusterName(),
             requestHeader.getBrokerAddr(),
@@ -227,6 +267,7 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
             registerBrokerBody.getFilterServerList(),
             ctx.channel());
 
+        //设置高可用serverAdd 地址
         responseHeader.setHaServerAddr(result.getHaServerAddr());
         responseHeader.setMasterAddr(result.getMasterAddr());
 
@@ -241,7 +282,9 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
     private boolean checksum(ChannelHandlerContext ctx, RemotingCommand request,
         RegisterBrokerRequestHeader requestHeader) {
         if (requestHeader.getBodyCrc32() != 0) {
+            //这是什么骚操作？？？  一番查找后 大概了解  类似MD5生成一个唯一值 。 （据说理论上可能不唯一）
             final int crc32 = UtilAll.crc32(request.getBody());
+            //应该是起到消息防重的作用 参考链接：  https://help.aliyun.com/document_detail/29548.html
             if (crc32 != requestHeader.getBodyCrc32()) {
                 log.warn(String.format("receive registerBroker request,crc32 not match,from %s",
                     RemotingHelper.parseChannelRemoteAddr(ctx.channel())));

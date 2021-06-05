@@ -23,6 +23,16 @@ import org.apache.rocketmq.remoting.protocol.RemotingCommand;
  * Common remoting command processor
  */
 public interface NettyRequestProcessor {
+
+    /**
+     * 处理请求具体执行方法
+     * 实现很多 目前只看 DefaultRequestProcessor 的实现
+     *
+     * @param ctx
+     * @param request
+     * @return
+     * @throws Exception
+     */
     RemotingCommand processRequest(ChannelHandlerContext ctx, RemotingCommand request)
         throws Exception;
 
