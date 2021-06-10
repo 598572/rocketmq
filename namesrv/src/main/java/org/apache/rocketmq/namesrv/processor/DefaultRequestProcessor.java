@@ -57,7 +57,7 @@ import org.apache.rocketmq.common.protocol.header.namesrv.WipeWritePermOfBrokerR
 import org.apache.rocketmq.common.protocol.header.namesrv.WipeWritePermOfBrokerResponseHeader;
 import org.apache.rocketmq.common.protocol.route.TopicRouteData;
 import org.apache.rocketmq.namesrv.NamesrvController;
-import org.apache.rocketmq.namesrv.routeinfo.BrokerLiveInfo;
+
 import org.apache.rocketmq.remoting.common.RemotingHelper;
 import org.apache.rocketmq.remoting.exception.RemotingCommandException;
 import org.apache.rocketmq.remoting.netty.AsyncNettyRequestProcessor;
@@ -269,6 +269,7 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
 
         //设置高可用serverAdd 地址
         responseHeader.setHaServerAddr(result.getHaServerAddr());
+        //设置主节点信息
         responseHeader.setMasterAddr(result.getMasterAddr());
 
         byte[] jsonValue = this.namesrvController.getKvConfigManager().getKVListByNamespace(NamesrvUtil.NAMESPACE_ORDER_TOPIC_CONFIG);
@@ -302,15 +303,48 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
             (QueryDataVersionRequestHeader) request.decodeCommandCustomHeader(QueryDataVersionRequestHeader.class);
         DataVersion dataVersion = DataVersion.decode(request.getBody(), DataVersion.class);
 
+        // 关键代码：判断版本是否发生变化
         Boolean changed = this.namesrvController.getRouteInfoManager().isBrokerTopicConfigChanged(requestHeader.getBrokerAddr(), dataVersion);
+        // 如果没改变，就更新最后一次的上报时间为当前时间 如果改变了 （逻辑不在这里 有线程池监控broker的心跳） 那么应该是需要重新注册的 还记得 NamesrvController的 initialize方法吗
+        // 里边有个线程池专门检测 broker信息  他是： scheduleAtFixedRate 如下：
+        /**
+         * this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
+         *     @Override
+         *     public void run() {
+         *         NamesrvController.this.routeInfoManager.scanNotActiveBroker();
+         *     }
+         * }, 5, 10, TimeUnit.SECONDS);
+         *
+         * 扫描不活跃的（心跳时间内超过2min的broker 将其移除）
+         * public void scanNotActiveBroker() {
+         *     // brokerLiveTable：存放活跃的broker，就是找出其中不活跃的，然后移除，操作的是 brokerLiveTable
+         *     Iterator<Entry<String, BrokerLiveInfo>> it = this.brokerLiveTable.entrySet().iterator();
+         *     while (it.hasNext()) {
+         *         Entry<String, BrokerLiveInfo> next = it.next();
+         *         // 上一次的心跳时间
+         *         long last = next.getValue().getLastUpdateTimestamp();
+         *         // 根据心跳时间判断是否存活，超时时间为2min
+         *         if ((last + BROKER_CHANNEL_EXPIRED_TIME) < System.currentTimeMillis()) {
+         *             RemotingUtil.closeChannel(next.getValue().getChannel());
+         *             // 移除
+         *             it.remove();
+         *             // 处理channel的关闭，这个方法里会处理其他 hashMap 的移除
+         *             this.onChannelDestroy(next.getKey(), next.getValue().getChannel());
+         *         }
+         *     }
+         * }
+         *
+         *
+         */
         if (!changed) {
+            //更新当前时间为最后注册时间 这玩意也就是咱们平时说的心跳？？？？？？？？？
             this.namesrvController.getRouteInfoManager().updateBrokerInfoUpdateTimestamp(requestHeader.getBrokerAddr());
         }
 
         DataVersion nameSeverDataVersion = this.namesrvController.getRouteInfoManager().queryBrokerTopicConfig(requestHeader.getBrokerAddr());
         response.setCode(ResponseCode.SUCCESS);
         response.setRemark(null);
-
+        //返回 nameServer当前的版本号
         if (nameSeverDataVersion != null) {
             response.setBody(nameSeverDataVersion.encode());
         }
@@ -384,6 +418,7 @@ public class DefaultRequestProcessor extends AsyncNettyRequestProcessor implemen
         final GetRouteInfoRequestHeader requestHeader =
             (GetRouteInfoRequestHeader) request.decodeCommandCustomHeader(GetRouteInfoRequestHeader.class);
 
+        // 根据topic 获取topic路由信息
         TopicRouteData topicRouteData = this.namesrvController.getRouteInfoManager().pickupTopicRouteData(requestHeader.getTopic());
 
         if (topicRouteData != null) {

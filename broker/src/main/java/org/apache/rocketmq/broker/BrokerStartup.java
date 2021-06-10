@@ -87,7 +87,13 @@ public class BrokerStartup {
         }
     }
 
+    /**
+     * 创建 brokerController
+     * @param args
+     * @return
+     */
     public static BrokerController createBrokerController(String[] args) {
+        //是不是似曾相识？没错 在 nameServerController里也见过 是处理命令行参数的 这里不做重点
         System.setProperty(RemotingCommand.REMOTING_VERSION_KEY, Integer.toString(MQVersion.CURRENT_VERSION));
 
         if (null == System.getProperty(NettySystemConfig.COM_ROCKETMQ_REMOTING_SOCKET_SNDBUF_SIZE)) {
@@ -113,14 +119,16 @@ public class BrokerStartup {
 
             nettyClientConfig.setUseTLS(Boolean.parseBoolean(System.getProperty(TLS_ENABLE,
                 String.valueOf(TlsSystemConfig.tlsMode == TlsMode.ENFORCING))));
+            //配置netty端口
             nettyServerConfig.setListenPort(10911);
+            //消息存储
             final MessageStoreConfig messageStoreConfig = new MessageStoreConfig();
-
+            //如果是从节点 访问消息内存最大比率 - 10
             if (BrokerRole.SLAVE == messageStoreConfig.getBrokerRole()) {
                 int ratio = messageStoreConfig.getAccessMessageInMemoryMaxRatio() - 10;
                 messageStoreConfig.setAccessMessageInMemoryMaxRatio(ratio);
             }
-
+            //处理命令行
             if (commandLine.hasOption('c')) {
                 String file = commandLine.getOptionValue('c');
                 if (file != null) {
@@ -139,9 +147,9 @@ public class BrokerStartup {
                     in.close();
                 }
             }
-
+            //设置属性值
             MixAll.properties2Object(ServerUtil.commandLine2Properties(commandLine), brokerConfig);
-
+            //必须设置 ROCKETMQ_HOME
             if (null == brokerConfig.getRocketmqHome()) {
                 System.out.printf("Please set the %s variable in your environment to match the location of the RocketMQ installation", MixAll.ROCKETMQ_HOME_ENV);
                 System.exit(-2);
@@ -219,12 +227,14 @@ public class BrokerStartup {
             // remember all configs to prevent discard
             controller.getConfiguration().registerConfig(properties);
 
+            //BrokerController初始化 这个是属于重要方法 需好好看看
             boolean initResult = controller.initialize();
             if (!initResult) {
                 controller.shutdown();
                 System.exit(-3);
             }
 
+            //jvm退出前  执行 controller.shutdown(); 大多是对线程池的 shutdown()调用;
             Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
                 private volatile boolean hasShutdown = false;
                 private AtomicInteger shutdownTimes = new AtomicInteger(0);

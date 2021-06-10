@@ -48,11 +48,18 @@ import org.apache.rocketmq.remoting.common.RemotingUtil;
 public class RouteInfoManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
     private final static long BROKER_CHANNEL_EXPIRED_TIME = 1000 * 60 * 2;
+
+    //传说中的读写锁 在这里看到了如何使用 666
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    /** topic路由信息。 存放topic和 Queue的映射关系 可以看出一个topic可以有多个Queue   */
     private final HashMap<String/* topic */, List<QueueData>> topicQueueTable;
+    /** broker具体信息。 存放broker 具体的信息  */
     private final HashMap<String/* brokerName */, BrokerData> brokerAddrTable;
+    /** clusterName和brokerName映射信息 */
     private final HashMap<String/* clusterName */, Set<String/* brokerName */>> clusterAddrTable;
+    /** broker地址 和存活 的broker 的映射信息 */
     private final HashMap<String/* brokerAddr */, BrokerLiveInfo> brokerLiveTable;
+    /** broker地址 和过滤服务器的信息 ？？？？？  */
     private final HashMap<String/* brokerAddr */, List<String>/* Filter Server */> filterServerTable;
 
     public RouteInfoManager() {
@@ -99,6 +106,18 @@ public class RouteInfoManager {
         return topicList.encode();
     }
 
+    /**
+     * 注册 broker信息 这个方法比较重要 好好看看
+     * @param clusterName
+     * @param brokerAddr
+     * @param brokerName
+     * @param brokerId
+     * @param haServerAddr
+     * @param topicConfigWrapper
+     * @param filterServerList
+     * @param channel
+     * @return
+     */
     public RegisterBrokerResult registerBroker(
         final String clusterName,
         final String brokerAddr,
@@ -111,29 +130,41 @@ public class RouteInfoManager {
         RegisterBrokerResult result = new RegisterBrokerResult();
         try {
             try {
+                //研究了下 具体示例在xzll项目里
+                /**
+                 * 等待可中断类型的获取锁 这就是比 synchronized  关键字 高级的地方
+                 */
+                //申请写锁
                 this.lock.writeLock().lockInterruptibly();
-
+                //根据节点名 获取所有在这个节点上的broker 如果在该节点不存在broker信息 那么初始化一个broker 并把当前的broker加进该节点中去
                 Set<String> brokerNames = this.clusterAddrTable.get(clusterName);
                 if (null == brokerNames) {
+                    //初始化broker信息
                     brokerNames = new HashSet<String>();
                     this.clusterAddrTable.put(clusterName, brokerNames);
                 }
+                //把要注册的broker add 进去
                 brokerNames.add(brokerName);
-
+                //是否第一次注册？
                 boolean registerFirst = false;
-
+                //根据brokerName获取 broker 具体信息
                 BrokerData brokerData = this.brokerAddrTable.get(brokerName);
                 if (null == brokerData) {
+                    //没找到 即是第一次注册 那么初始化broker具体信息
                     registerFirst = true;
                     brokerData = new BrokerData(clusterName, brokerName, new HashMap<Long, String>());
                     this.brokerAddrTable.put(brokerName, brokerData);
                 }
                 Map<Long, String> brokerAddrsMap = brokerData.getBrokerAddrs();
                 //Switch slave to master: first remove <1, IP:PORT> in namesrv, then add <0, IP:PORT>
+                //将slave切换到master：先去掉namesrv中的<1, IP:PORT>，然后添加<0, IP:PORT>
+
                 //The same IP:PORT must only have one record in brokerAddrTable
+                //同一个IP:PORT在brokerAddrTable中只能有一条记录
                 Iterator<Entry<Long, String>> it = brokerAddrsMap.entrySet().iterator();
                 while (it.hasNext()) {
                     Entry<Long, String> item = it.next();
+
                     if (null != brokerAddr && brokerAddr.equals(item.getValue()) && brokerId != item.getKey()) {
                         it.remove();
                     }
@@ -142,6 +173,7 @@ public class RouteInfoManager {
                 String oldAddr = brokerData.getBrokerAddrs().put(brokerId, brokerAddr);
                 registerFirst = registerFirst || (null == oldAddr);
 
+                //如果是主节点（brokerId=0 为主节点）的话 执行下边逻辑
                 if (null != topicConfigWrapper
                     && MixAll.MASTER_ID == brokerId) {
                     if (this.isBrokerTopicConfigChanged(brokerAddr, topicConfigWrapper.getDataVersion())
@@ -150,12 +182,13 @@ public class RouteInfoManager {
                             topicConfigWrapper.getTopicConfigTable();
                         if (tcTable != null) {
                             for (Map.Entry<String, TopicConfig> entry : tcTable.entrySet()) {
+                                // 添加topic，里面操作的是 topicQueueTable
                                 this.createAndUpdateQueueData(brokerName, entry.getValue());
                             }
                         }
                     }
                 }
-
+                //将存活的broker添加到brokerLiveTable结构中，操作的是 brokerLiveTable  利用map put方法的返回值判断是否新增 666
                 BrokerLiveInfo prevBrokerLiveInfo = this.brokerLiveTable.put(brokerAddr,
                     new BrokerLiveInfo(
                         System.currentTimeMillis(),
@@ -173,7 +206,7 @@ public class RouteInfoManager {
                         this.filterServerTable.put(brokerAddr, filterServerList);
                     }
                 }
-
+                //如果不是主节点 那么只设置为 HaServerAddr即可
                 if (MixAll.MASTER_ID != brokerId) {
                     String masterAddr = brokerData.getBrokerAddrs().get(MixAll.MASTER_ID);
                     if (masterAddr != null) {
@@ -185,12 +218,13 @@ public class RouteInfoManager {
                     }
                 }
             } finally {
+                //释放写锁
                 this.lock.writeLock().unlock();
             }
         } catch (Exception e) {
             log.error("registerBroker Exception", e);
         }
-
+        //返回注册信息
         return result;
     }
 
@@ -200,6 +234,7 @@ public class RouteInfoManager {
     }
 
     public DataVersion queryBrokerTopicConfig(final String brokerAddr) {
+        //获取存货的broker信息
         BrokerLiveInfo prev = this.brokerLiveTable.get(brokerAddr);
         if (prev != null) {
             return prev.getDataVersion();
@@ -385,26 +420,30 @@ public class RouteInfoManager {
         try {
             try {
                 this.lock.readLock().lockInterruptibly();
+                //先根据topic获取 queueDataList
                 List<QueueData> queueDataList = this.topicQueueTable.get(topic);
                 if (queueDataList != null) {
                     topicRouteData.setQueueDatas(queueDataList);
+                    //找到queueDataList 标志 设置为true
                     foundQueueData = true;
-
+                    //遍历  queueData 获取并添加broker名称至 brokerNameSet 集合
                     Iterator<QueueData> it = queueDataList.iterator();
                     while (it.hasNext()) {
                         QueueData qd = it.next();
                         brokerNameSet.add(qd.getBrokerName());
                     }
-
+                    //找到brokerName后 获取broker具体信息
                     for (String brokerName : brokerNameSet) {
                         BrokerData brokerData = this.brokerAddrTable.get(brokerName);
                         if (null != brokerData) {
                             BrokerData brokerDataClone = new BrokerData(brokerData.getCluster(), brokerData.getBrokerName(), (HashMap<Long, String>) brokerData
-                                .getBrokerAddrs().clone());
+                                .getBrokerAddrs().clone());//这里用了个hashmap的 clone方法 TODO
                             brokerDataList.add(brokerDataClone);
+                            //标识找到broker信息
                             foundBrokerData = true;
                             for (final String brokerAddr : brokerDataClone.getBrokerAddrs().values()) {
                                 List<String> filterServerList = this.filterServerTable.get(brokerAddr);
+                                //先add 后put也可以 会放到集合中 之前遇到过这个问题 现在矫正一下 看源码 收获多果然啊
                                 filterServerMap.put(brokerAddr, filterServerList);
                             }
                         }
@@ -753,9 +792,13 @@ public class RouteInfoManager {
 }
 
 class BrokerLiveInfo {
+    /**上次心跳时间戳 */
     private long lastUpdateTimestamp;
+    /**版本信息 */
     private DataVersion dataVersion;
+    /** 应该是netty的东西 */
     private Channel channel;
+    /**高可用的服务地址 */
     private String haServerAddr;
 
     public BrokerLiveInfo(long lastUpdateTimestamp, DataVersion dataVersion, Channel channel,

@@ -330,7 +330,7 @@ public class MixAll {
     }
 
     /**
-     * 为目标对象赋值通过 配置对象
+     * 为目标对象赋值通过 配置对象   BrokerStartup 和 NamesrvStartup都用到了
      * @param p
      * @param object
      */
