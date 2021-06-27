@@ -37,6 +37,11 @@ public class AclClientRPCHook implements RPCHook {
         this.sessionCredentials = sessionCredentials;
     }
 
+    /**
+     * 请求之前做的一些操作 acl 认证类的操作
+     * @param remoteAddr
+     * @param request
+     */
     @Override
     public void doBeforeRequest(String remoteAddr, RemotingCommand request) {
         byte[] total = AclUtils.combineRequestContent(request,

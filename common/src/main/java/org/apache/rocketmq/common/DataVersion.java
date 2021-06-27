@@ -49,6 +49,12 @@ public class DataVersion extends RemotingSerializable {
         this.counter = counter;
     }
 
+    /**
+     * 注意这里的 equals 判断规则 ， 即是 判断broker是否改变的规则  !!!!!!!!!!!重要
+     *
+     * @param o
+     * @return
+     */
     @Override
     public boolean equals(final Object o) {
         if (this == o)

@@ -184,6 +184,8 @@ public class ConsumeQueueExt {
      * Be careful, this method is not thread safe.
      * </p>
      *
+     * 保存文件 到映射缓冲区 (其实是将 ByteBuffer添加到了 fileChannel ) 并且 返回地址。 <p> 注意，这个方法不是线程安全的。
+     *
      * @return success: < 0: fail: >=0
      */
     public long put(final CqExtUnit cqExtUnit) {
@@ -198,8 +200,9 @@ public class ConsumeQueueExt {
                 log.warn("Capacity of ext is maximum!{}, {}", this.mappedFileQueue.getMaxOffset(), size);
                 return 1;
             }
-            // unit size maybe change.but, the same most of the time.
+            // unit size maybe change.but, the same most of the time. 单位大小可能会改变。但是，大部分时间都是一样的。
             if (this.tempContainer == null || this.tempContainer.capacity() < size) {
+                //使用 堆内存
                 this.tempContainer = ByteBuffer.allocate(size);
             }
 

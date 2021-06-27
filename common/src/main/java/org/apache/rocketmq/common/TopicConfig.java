@@ -20,7 +20,9 @@ import org.apache.rocketmq.common.constant.PermName;
 
 public class TopicConfig {
     private static final String SEPARATOR = " ";
+    //在这里可以看到默认读 queue数量是 16
     public static int defaultReadQueueNums = 16;
+    //在这里可以看到默认写 queue数量是 16
     public static int defaultWriteQueueNums = 16;
     private String topicName;
     private int readQueueNums = defaultReadQueueNums;

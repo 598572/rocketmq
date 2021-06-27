@@ -57,6 +57,9 @@ import org.apache.rocketmq.store.PutMessageResult;
 import org.apache.rocketmq.store.config.StorePathConfigHelper;
 import org.apache.rocketmq.store.stats.BrokerStatsManager;
 
+/**
+ * 发送消息时候的处理器 (处理producer发送过来的数据)  好像废话一样 哈哈
+ */
 public class SendMessageProcessor extends AbstractSendMessageProcessor implements NettyRequestProcessor {
 
     private List<ConsumeMessageHook> consumeMessageHookList;
@@ -65,11 +68,20 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         super(brokerController);
     }
 
+    /**
+     * 发送消息具体处理方式 即（broker处理生产者消息的具体实现）
+     *
+     * @param ctx
+     * @param request
+     * @return
+     * @throws RemotingCommandException
+     */
     @Override
     public RemotingCommand processRequest(ChannelHandlerContext ctx,
                                           RemotingCommand request) throws RemotingCommandException {
         RemotingCommand response = null;
         try {
+            // broker处理接收消息 可以看到是 异步的
             response = asyncProcessRequest(ctx, request).get();
         } catch (InterruptedException | ExecutionException e) {
             log.error("process SendMessage error, request : " + request.toString(), e);
@@ -82,22 +94,36 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         asyncProcessRequest(ctx, request).thenAcceptAsync(responseCallback::callback, this.brokerController.getSendMessageExecutor());
     }
 
+    /**
+     * 异步处理生产者发过来的消息
+     *
+     * 又是 CompletableFuture  666666
+     * @param ctx
+     * @param request
+     * @return
+     * @throws RemotingCommandException
+     */
     public CompletableFuture<RemotingCommand> asyncProcessRequest(ChannelHandlerContext ctx,
                                                                   RemotingCommand request) throws RemotingCommandException {
         final SendMessageContext mqtraceContext;
+        //消费者发送消息回退 或者 生产者发消息
         switch (request.getCode()) {
             case RequestCode.CONSUMER_SEND_MSG_BACK:
+                //CONSUMER_SEND_MSG_BACK 消息回退
                 return this.asyncConsumerSendMsgBack(ctx, request);
             default:
+                //生产者发消息
                 SendMessageRequestHeader requestHeader = parseRequestHeader(request);
                 if (requestHeader == null) {
                     return CompletableFuture.completedFuture(null);
                 }
                 mqtraceContext = buildMsgContext(ctx, requestHeader);
                 this.executeSendMessageHookBefore(ctx, request, mqtraceContext);
+                //批量发送
                 if (requestHeader.isBatch()) {
                     return this.asyncSendBatchMessage(ctx, request, mqtraceContext, requestHeader);
                 } else {
+                    //单个发送
                     return this.asyncSendMessage(ctx, request, mqtraceContext, requestHeader);
                 }
         }
@@ -181,7 +207,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             maxReconsumeTimes = requestHeader.getMaxReconsumeTimes();
         }
 
-        if (msgExt.getReconsumeTimes() >= maxReconsumeTimes 
+        if (msgExt.getReconsumeTimes() >= maxReconsumeTimes
             || delayLevel < 0) {
             newTopic = MixAll.getDLQTopic(requestHeader.getGroup());
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % DLQ_NUMS_PER_GROUP;
@@ -245,7 +271,16 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         });
     }
 
-
+    /**
+     * 单个发送消息(异步) 在方法的最后 会调用 this.brokerController.getMessageStore().asyncPutMessage 这个方法内部实现了 commlitLog的相关东西
+     * commitlog 他是rocketmq消息持久化的具体实现 需要仔细研魔
+     *
+     * @param ctx
+     * @param request
+     * @param mqtraceContext
+     * @param requestHeader
+     * @return
+     */
     private CompletableFuture<RemotingCommand> asyncSendMessage(ChannelHandlerContext ctx, RemotingCommand request,
                                                                 SendMessageContext mqtraceContext,
                                                                 SendMessageRequestHeader requestHeader) {
@@ -259,13 +294,16 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         final byte[] body = request.getBody();
 
         int queueIdInt = requestHeader.getQueueId();
+        //根据请求头的topic获取topic配置的具体信息
         TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
 
+        // 如果没指定队列, 就随机指定一个队列 这个好像之前使用rocketmq时候遇到过 当时就没指定queue 所以发的消息会随机到某个queue中  !!!!!!!!!!!!!!
         if (queueIdInt < 0) {
             queueIdInt = randomQueueId(topicConfig.getWriteQueueNums());
         }
-
+        // 将消息包装为 MessageExtBrokerInner
         MessageExtBrokerInner msgInner = new MessageExtBrokerInner();
+        //消息发送到哪个queue呀 哪个topic呀 就是在这里设置的 !!!!!!!!!!
         msgInner.setTopic(requestHeader.getTopic());
         msgInner.setQueueId(queueIdInt);
 
@@ -288,7 +326,12 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         CompletableFuture<PutMessageResult> putMessageResult = null;
         Map<String, String> origProps = MessageDecoder.string2messageProperties(requestHeader.getProperties());
         String transFlag = origProps.get(MessageConst.PROPERTY_TRANSACTION_PREPARED);
+
+        //检测是否是事务型消息
         if (transFlag != null && Boolean.parseBoolean(transFlag)) {
+            //检测该broker是否允许事务型消息 不允许那么返回没权限 默认就是不允许 呵呵
+            // @ImportantField
+            // private boolean rejectTransactionMessage = false;
             if (this.brokerController.getBrokerConfig().isRejectTransactionMessage()) {
                 response.setCode(ResponseCode.NO_PERMISSION);
                 response.setRemark(
@@ -296,10 +339,13 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                                 + "] sending transaction message is forbidden");
                 return CompletableFuture.completedFuture(response);
             }
+            // 说明broker允许事务消息  则发送事务消息 后边在说 暂时只看 普通消息
             putMessageResult = this.brokerController.getTransactionalMessageService().asyncPrepareMessage(msgInner);
         } else {
+            // 发送普通消息 这里边涉及消息的持久化机制 很重要 !!!!!!!!!!
             putMessageResult = this.brokerController.getMessageStore().asyncPutMessage(msgInner);
         }
+        //处理putmessage返回的结果 CompletableFuture 的  thenApply(); 方法
         return handlePutMessageResultFuture(putMessageResult, response, request, msgInner, responseHeader, mqtraceContext, ctx, queueIdInt);
     }
 
@@ -644,6 +690,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
     }
 
     private int randomQueueId(int writeQueueNums) {
+        //简单粗暴 随机
         return (this.random.nextInt() % 99999999) % writeQueueNums;
     }
 

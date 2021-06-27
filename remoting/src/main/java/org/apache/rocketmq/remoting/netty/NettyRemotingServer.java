@@ -186,6 +186,12 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
             && Epoll.isAvailable();
     }
 
+    /**
+     * 相当重要的方法 可以说是核心!!!!!!!!!!!!!!
+     *
+     * 启动一个netty服务 nameServerController 和 brokerController都用到了
+     * nameServer用来处理注册信息 ; broker用来接收生产者发过来的消息和处理消费消息 可能后续还有地方用到
+     */
     @Override
     public void start() {
         this.defaultEventExecutorGroup = new DefaultEventExecutorGroup(
@@ -223,7 +229,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                                 new NettyDecoder(),
                                 new IdleStateHandler(0, 0, nettyServerConfig.getServerChannelMaxIdleTimeSeconds()),
                                 connectionManageHandler,
-                                //netty用来处理连接事件与读写事件的线程
+                                //netty用来处理连接事件与读写事件的线程 看到broker的启动流程后 发现他也是调用了本方法 哈哈
                                     serverHandler
                             );
                     }
@@ -305,6 +311,21 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         }
     }
 
+    /**
+     *
+     *  最终，这些处理器注册到了processorTable中，它是NettyRemotingAbstract的成员变量，定义如下：
+     *  HashMap<Integer,Pair<NettyRequestProcessor, ExecutorService>> processorTable;
+     *
+     *  这是一个hashMap的结构，key为code，value为Pair，该类(Pair)中有两个成员变量：NettyRequestProcessor、ExecutorService，code
+     *  与NettyRequestProcessor的映射关系就是在hashMap里存储的  （so 很重要）根据请求代码 来找对应的处理器 是不是nameServer中也有类似的？
+     *  没错就是 DefaultRequestProcessor#processRequest 这个方法 （根据不同的code走不同的处理 switch 大法好）
+     *  ps: 看半天其实 nameServer和broker都用到了 NettyRemotingServer 有些代码是共用的
+     *  broker是根据传入的 processor来注册 不同的处理器  而nameServer就是简单粗暴 全部都是 DefaultRequestProcessor 走天下 哈哈
+     *
+     * @param requestCode
+     * @param processor
+     * @param executor
+     */
     @Override
     public void registerProcessor(int requestCode, NettyRequestProcessor processor, ExecutorService executor) {
         ExecutorService executorThis = executor;
@@ -442,7 +463,9 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
      * NettyRemotingAbstract 抽象类的 processMessageReceived 方法
      *
      *
-     * 处理Broker/Producer/Consumer消息 注意这个方法是 nameServer处理消息的入口 重要 ****
+     * 1.处理Broker/Producer/Consumer消息 注意这个方法是 nameServer处理消息的入口 重要 **** （20210605）
+     * 2.后来（20210617）发现也是broker接收消息的入口 哈哈 后边肯定也是consumer消费消息的入口吧估计
+     *
      */
     @ChannelHandler.Sharable
     class NettyServerHandler extends SimpleChannelInboundHandler<RemotingCommand> {

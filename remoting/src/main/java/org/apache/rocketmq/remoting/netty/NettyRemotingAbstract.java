@@ -79,6 +79,9 @@ public abstract class NettyRemotingAbstract {
     /**
      * This container holds all processors per request code, aka, for each incoming request, we may look up the
      * responding processor in this map to handle the request.
+     *
+     * 这个容器保存每个请求代码的所有处理器，也就是，对于每个传入的请求，我们可以在这个映射中查找响应处理器来处理请求。 (这下知道这个东东的重要了吧)
+     *
      */
     protected final HashMap<Integer/* request code */, Pair<NettyRequestProcessor, ExecutorService>> processorTable =
         new HashMap<Integer, Pair<NettyRequestProcessor, ExecutorService>>(64);
@@ -194,11 +197,14 @@ public abstract class NettyRemotingAbstract {
     /**
      * Process incoming request command issued by remote peer. 处理远程对等方发出的传入请求命令。
      *
+     *
      * @param ctx channel handler context.
      * @param cmd request command.
      */
     public void processRequestCommand(final ChannelHandlerContext ctx, final RemotingCommand cmd) {
         //获取netty请求处理器 如果是null  默认 defaultRequestProcessor 这个处理器
+        //（20210617） 沃日 nameServer和broker居然都用的同一个方法 nameServer只有一个处理器就是默认请求处理器 而 broker有多个各种各样的处理器
+        // 后边估计consumer也用这个方法
         final Pair<NettyRequestProcessor, ExecutorService> matched = this.processorTable.get(cmd.getCode());
         // defaultRequestProcessor 这个处理器是不是在哪里见过？ 没错 他是在 NamesrvController 类中的 registerProcessor
         // 方法注册的 这货挺重要的 他是在 NamesrvController  initialize 方法中初始化的 不记得了？回去看看代码吧
@@ -451,6 +457,17 @@ public abstract class NettyRemotingAbstract {
         }
     }
 
+    /**
+     * 向通道发送请求命令 使用netty进行远程通信
+     *
+     * @param channel
+     * @param request
+     * @param timeoutMillis
+     * @return
+     * @throws InterruptedException
+     * @throws RemotingSendRequestException
+     * @throws RemotingTimeoutException
+     */
     public RemotingCommand invokeSyncImpl(final Channel channel, final RemotingCommand request,
         final long timeoutMillis)
         throws InterruptedException, RemotingSendRequestException, RemotingTimeoutException {
@@ -473,7 +490,7 @@ public abstract class NettyRemotingAbstract {
                     responseTable.remove(opaque);
                     responseFuture.setCause(f.cause());
                     responseFuture.putResponse(null);
-                    log.warn("send a request command to channel <" + addr + "> failed.");
+                    log.warn("send a request command to channel <" + addr + "> failed.");//向通道发送请求命令
                 }
             });
 

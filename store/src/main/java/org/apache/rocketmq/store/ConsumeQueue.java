@@ -28,6 +28,7 @@ import org.apache.rocketmq.store.config.StorePathConfigHelper;
 public class ConsumeQueue {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
+    //存储单元长度 默认20
     public static final int CQ_STORE_UNIT_SIZE = 20;
     private static final InternalLogger LOG_ERROR = InternalLoggerFactory.getLogger(LoggerName.STORE_ERROR_LOGGER_NAME);
 
@@ -376,6 +377,10 @@ public class ConsumeQueue {
         return this.minLogicOffset / CQ_STORE_UNIT_SIZE;
     }
 
+    /**
+     * 添加消息信息到  consumerQueue   缓存区page cache
+     * @param request
+     */
     public void putMessagePositionInfoWrapper(DispatchRequest request) {
         final int maxRetries = 30;
         boolean canWrite = this.defaultMessageStore.getRunningFlags().isCQWriteable();
@@ -383,6 +388,7 @@ public class ConsumeQueue {
             long tagsCode = request.getTagsCode();
             if (isExtWriteEnable()) {
                 ConsumeQueueExt.CqExtUnit cqExtUnit = new ConsumeQueueExt.CqExtUnit();
+                //可以看到 添加到 consumerQueue的 不是完整的 消息数据 完整的消息数据在 commitLog中保存呢!!!!!!!!!!!!
                 cqExtUnit.setFilterBitMap(request.getBitMap());
                 cqExtUnit.setMsgStoreTime(request.getStoreTimestamp());
                 cqExtUnit.setTagsCode(request.getTagsCode());
@@ -395,6 +401,7 @@ public class ConsumeQueue {
                         topic, queueId, request.getCommitLogOffset());
                 }
             }
+            //添加到 pagecache 缓存区
             boolean result = this.putMessagePositionInfo(request.getCommitLogOffset(),
                 request.getMsgSize(), tagsCode, request.getConsumeQueueOffset());
             if (result) {
@@ -488,12 +495,21 @@ public class ConsumeQueue {
         }
     }
 
+    /**
+     * 获取指定的 consumequeue根据 开始索引  即  (offset)
+     * @param startIndex
+     * @return
+     */
     public SelectMappedBufferResult getIndexBuffer(final long startIndex) {
         int mappedFileSize = this.mappedFileSize;
+        //计算offset 使用 startIndex 乘以 consumequeue 存储单元长度 默认20
         long offset = startIndex * CQ_STORE_UNIT_SIZE;
+        //要获取的 offset大于最小的offset 才获取  否则返回null
         if (offset >= this.getMinLogicOffset()) {
+            //获取 mappendFile 从 mappendFiles队列里边 (注意并不是从磁盘上  TODO why？？？？？？？ )
             MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset);
             if (mappedFile != null) {
+                //获取指定区间的 ByteBuffer
                 SelectMappedBufferResult result = mappedFile.selectMappedBuffer((int) (offset % mappedFileSize));
                 return result;
             }

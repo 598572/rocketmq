@@ -26,12 +26,14 @@ import org.apache.commons.cli.ParseException;
 
 public class ServerUtil {
 
+    //构建 h  n 命令对象
     public static Options buildCommandlineOptions(final Options options) {
         Option opt = new Option("h", "help", false, "Print help");
         opt.setRequired(false);
         options.addOption(opt);
 
         opt =
+                //将idea中的配置 -n localhost:9876 autoCreateTopicEnable=true 读取 当 hasArg=true时候 可以设置value
             new Option("n", "namesrvAddr", true,
                 "Name server address list, eg: 192.168.0.1:9876;192.168.0.2:9876");
         opt.setRequired(false);

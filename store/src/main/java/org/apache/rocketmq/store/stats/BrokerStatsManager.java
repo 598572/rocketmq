@@ -55,6 +55,7 @@ public class BrokerStatsManager {
     public static final String GROUP_GET_FALL_SIZE = "GROUP_GET_FALL_SIZE";
     public static final String GROUP_GET_FALL_TIME = "GROUP_GET_FALL_TIME";
     // Pull Message Latency
+    // 拉取消息延迟
     public static final String GROUP_GET_LATENCY = "GROUP_GET_LATENCY";
 
     /**
@@ -198,6 +199,13 @@ public class BrokerStatsManager {
         return this.statsTable.get(GROUP_GET_NUMS).getStatsDataInMinute(statsKey).getTps();
     }
 
+    /**
+     * 记录磁盘落后多少 时间
+     * @param group
+     * @param topic
+     * @param queueId
+     * @param fallBehind
+     */
     public void recordDiskFallBehindTime(final String group, final String topic, final int queueId,
         final long fallBehind) {
         final String statsKey = String.format("%d@%s@%s", queueId, topic, group);

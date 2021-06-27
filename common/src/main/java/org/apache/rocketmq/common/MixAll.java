@@ -145,6 +145,7 @@ public class MixAll {
         String bakFile = fileName + ".bak";
         String prevContent = file2String(fileName);
         if (prevContent != null) {
+            //将消息 写入磁盘  防止消息丢失
             string2FileNotSafe(prevContent, bakFile);
         }
 

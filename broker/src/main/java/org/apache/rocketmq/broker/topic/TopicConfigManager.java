@@ -372,10 +372,12 @@ public class TopicConfigManager extends ConfigManager {
         if (orderKVTableFromNs != null && orderKVTableFromNs.getTable() != null) {
             boolean isChange = false;
             Set<String> orderTopics = orderKVTableFromNs.getTable().keySet();
+
             for (String topic : orderTopics) {
                 TopicConfig topicConfig = this.topicConfigTable.get(topic);
                 if (topicConfig != null && !topicConfig.isOrder()) {
                     topicConfig.setOrder(true);
+                    //当topic顺序发生变化后 需要更新 DataVersion的相关信息
                     isChange = true;
                     log.info("update order topic config, topic={}, order={}", topic, true);
                 }

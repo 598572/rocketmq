@@ -21,12 +21,17 @@ import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 
 /**
  * Common remoting command processor
+ *
+ * 这个处理器接口很重要 very 重要  broker nameServer 的各种处理器都是实现了该接口
+ *
  */
 public interface NettyRequestProcessor {
 
     /**
      * 处理请求具体执行方法
      * 实现很多 目前只看 DefaultRequestProcessor 的实现
+     * 20210617 看到broker的消息处理时候 发现broker的处理器是有很多种的（nameServer就是一种默认请求处理器） 所以需要看各个处理器实现方式
+     *
      *
      * @param ctx
      * @param request

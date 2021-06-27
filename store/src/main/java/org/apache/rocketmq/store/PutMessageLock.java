@@ -18,6 +18,8 @@ package org.apache.rocketmq.store;
 
 /**
  * Used when trying to put message
+ *
+ * 尝试放置消息时使用 两种实现 一种是CAS 一种是 ReentrantLock
  */
 public interface PutMessageLock {
     void lock();

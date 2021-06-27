@@ -144,6 +144,10 @@ public class MappedFileQueue {
         }
     }
 
+    /**
+     * 创建 MappedFile 对象 改构造会初始化 文件与内存的映射关系 也就是  mmap
+     * @return
+     */
     public boolean load() {
         File dir = new File(this.storePath);
         File[] files = dir.listFiles();
@@ -164,6 +168,7 @@ public class MappedFileQueue {
                     mappedFile.setWrotePosition(this.mappedFileSize);
                     mappedFile.setFlushedPosition(this.mappedFileSize);
                     mappedFile.setCommittedPosition(this.mappedFileSize);
+                    //将新创建的MappedFile 添加进  mappedFiles 队列中去
                     this.mappedFiles.add(mappedFile);
                     log.info("load " + file.getPath() + " OK");
                 } catch (IOException e) {
@@ -191,29 +196,45 @@ public class MappedFileQueue {
         return 0;
     }
 
+    /**
+     * 获取队列中的最后一个 MappendFile
+     * @param startOffset
+     * @param needCreate
+     * @return
+     */
     public MappedFile getLastMappedFile(final long startOffset, boolean needCreate) {
         long createOffset = -1;
+        //获取最后一个映射文件，如果为null或者写满则会执行创建逻辑
         MappedFile mappedFileLast = getLastMappedFile();
-
+        //最后一个映射文件为null,创建一个新的映射文件
         if (mappedFileLast == null) {
+            //计算将要创建的映射文件的起始偏移量
+            //如果startOffset<=mappedFileSize则起始偏移量为0
+            //如果startOffset>mappedFileSize则起始偏移量为是mappedFileSize的倍数
             createOffset = startOffset - (startOffset % this.mappedFileSize);
         }
-
+        //映射文件满了，创建新的映射文件
         if (mappedFileLast != null && mappedFileLast.isFull()) {
+            //创建的映射文件的偏移量等于最后一个映射文件的起始偏移量  + 映射文件的大小（commitlog文件大小）
             createOffset = mappedFileLast.getFileFromOffset() + this.mappedFileSize;
         }
 
         if (createOffset != -1 && needCreate) {
+            //构造commitlog名称
             String nextFilePath = this.storePath + File.separator + UtilAll.offset2FileName(createOffset);
             String nextNextFilePath = this.storePath + File.separator
                 + UtilAll.offset2FileName(createOffset + this.mappedFileSize);
             MappedFile mappedFile = null;
 
+            //优先通过allocateMappedFileService中方式构建映射文件，预分配方式，性能高
+            //如果上述方式失败则通过new创建映射文件
             if (this.allocateMappedFileService != null) {
+                // !!!!!!!!!!!!!重点看看
                 mappedFile = this.allocateMappedFileService.putRequestAndReturnMappedFile(nextFilePath,
                     nextNextFilePath, this.mappedFileSize);
             } else {
                 try {
+
                     mappedFile = new MappedFile(nextFilePath, this.mappedFileSize);
                 } catch (IOException e) {
                     log.error("create mappedFile exception", e);
@@ -422,13 +443,21 @@ public class MappedFileQueue {
         return deleteCount;
     }
 
+    /**
+     * 刷新到磁盘 他最终会调用 mappedFile.flush(); 这是最终的刷新到磁盘的方法 !!!!!!!!!!!
+     *
+     * @param flushLeastPages
+     * @return
+     */
     public boolean flush(final int flushLeastPages) {
         boolean result = true;
         MappedFile mappedFile = this.findMappedFileByOffset(this.flushedWhere, this.flushedWhere == 0);
         if (mappedFile != null) {
             long tmpTimeStamp = mappedFile.getStoreTimestamp();
-            int offset = mappedFile.flush(flushLeastPages);
-            long where = mappedFile.getFileFromOffset() + offset;
+            //调用force()方法 刷新到磁盘 !!!!!!!!!!!!!!!!!!
+            int offset = mappedFile.flush(flushLeastPages);// 返回当前刷新的位置
+
+            long where = mappedFile.getFileFromOffset() + offset;//计算现在的位置 where
             result = where == this.flushedWhere;
             this.flushedWhere = where;
             if (0 == flushLeastPages) {
@@ -439,12 +468,21 @@ public class MappedFileQueue {
         return result;
     }
 
+    /**
+     *  异步刷盘 只是提交到缓冲
+     *
+     * @param commitLeastPages
+     * @return
+     */
     public boolean commit(final int commitLeastPages) {
         boolean result = true;
+        //获取指定 位置的 MappendFile
         MappedFile mappedFile = this.findMappedFileByOffset(this.committedWhere, this.committedWhere == 0);
         if (mappedFile != null) {
+            //添加到 FileChannel  将 ByteBuffer
             int offset = mappedFile.commit(commitLeastPages);
             long where = mappedFile.getFileFromOffset() + offset;
+            //计算并 提交后的offset 如果和 预期的 offset一样 那么返回true 如果只提交了部分数据  那么返回false
             result = where == this.committedWhere;
             this.committedWhere = where;
         }
@@ -455,9 +493,13 @@ public class MappedFileQueue {
     /**
      * Finds a mapped file by offset.
      *
+     * 按偏移量查找映射文件 从 MappendFile队列中查找
+     *
      * @param offset Offset.
      * @param returnFirstOnNotFound If the mapped file is not found, then return the first one.
      * @return Mapped file or null (when not found and returnFirstOnNotFound is <code>false</code>).
+     *
+     * 如果未找到映射文件，则返回第一个。 @return 映射文件或 null（当未找到且 returnFirstOnNotFound 为 <code>false<code> 时）。
      */
     public MappedFile findMappedFileByOffset(final long offset, final boolean returnFirstOnNotFound) {
         try {

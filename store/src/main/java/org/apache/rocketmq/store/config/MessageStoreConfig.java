@@ -20,8 +20,13 @@ import java.io.File;
 import org.apache.rocketmq.common.annotation.ImportantField;
 import org.apache.rocketmq.store.ConsumeQueue;
 
+/**
+ * 消息存储的配置类
+ *
+ */
 public class MessageStoreConfig {
     //The root directory in which the log data is kept
+    // 保存日志数据的根目录
     @ImportantField
     private String storePathRootDir = System.getProperty("user.home") + File.separator + "store";
 
@@ -44,21 +49,27 @@ public class MessageStoreConfig {
 
     // CommitLog flush interval
     // flush data to disk
+    // CommitLog 刷新间隔将数据刷新到磁盘
     @ImportantField
     private int flushIntervalCommitLog = 500;
 
     // Only used if TransientStorePool enabled
     // flush data to FileChannel
+    // 仅在 TransientStorePool 启用 将数据刷新到 FileChannel 时使用
     @ImportantField
     private int commitIntervalCommitLog = 200;
 
     /**
      * introduced since 4.0.x. Determine whether to use mutex reentrantLock when putting message.<br/>
      * By default it is set to false indicating using spin lock when putting message.
+     *
+     * 从 4.0.x 开始引入。确定是否在放置消息时使用互斥锁 reentrantLock。<br> 默认设置为 false 表示在放置消息时使用自旋锁（CAS）。
+     * 见 {@link org.apache.rocketmq.store.PutMessageLock}
+     * 可已看到 默认使用CAS 自旋锁
      */
     private boolean useReentrantLockWhenPutMessage = false;
 
-    // Whether schedule flush,default is real-time
+    // Whether schedule flush,default is real-time  是否定时刷新，默认为实时
     @ImportantField
     private boolean flushCommitLogTimed = false;
     // ConsumeQueue flush interval
@@ -89,6 +100,7 @@ public class MessageStoreConfig {
     // How many pages are to be flushed when flush CommitLog
     private int flushCommitLogLeastPages = 4;
     // How many pages are to be committed when commit data to file
+    // 提交数据到文件时要提交多少页
     private int commitCommitLogLeastPages = 4;
     // Flush page size when the disk in warming state
     private int flushLeastPagesWhenWarmMapedFile = 1024 / 4 * 16;
@@ -615,6 +627,9 @@ public class MessageStoreConfig {
     /**
      * Enable transient commitLog store pool only if transientStorePoolEnable is true and the FlushDiskType is
      * ASYNC_FLUSH
+     *
+     * 仅当transientStorePoolEnable 为true 且FlushDiskType 为ASYNC_FLUSH 时才启用  瞬时存储 (自我翻译的呵呵)
+     *transientStorePoolEnable默认是 false
      *
      * @return <tt>true</tt> or <tt>false</tt>
      */

@@ -59,6 +59,8 @@ public interface MessageStore {
      *  rather than wait for result
      *  when result is completed, notify the client in async manner
      *
+     *  以异步方式将消息存入store，处理器可以在结果完成时处理下一个请求而不是等待结果，以异步方式通知客户端
+     *
      * @param msg MessageInstance to store
      * @return a CompletableFuture for the result of store operation
      */
@@ -78,6 +80,8 @@ public interface MessageStore {
     /**
      * Store a message into store.
      *
+     * 自我翻译 ： 将消息存储到磁盘中。 使用了 零拷贝 !!!!!!!!!!
+     *
      * @param msg Message instance to store
      * @return result of store operation.
      */
@@ -94,6 +98,11 @@ public interface MessageStore {
     /**
      * Query at most <code>maxMsgNums</code> messages belonging to <code>topic</code> at <code>queueId</code> starting
      * from given <code>offset</code>. Resulting messages will further be screened using provided message filter.
+     *
+     * !!!!!!!!!!!!!!!!!!!!!
+     * 从给定的 offset 开始，
+     * 在 queueId 处查询最多 maxMsgNums 个  属于 topic 的消息。
+     * 并使用提供的消息过滤器进一步筛选结果消息。
      *
      * @param group Consumer group that launches this query.
      * @param topic Topic to query.
@@ -276,6 +285,8 @@ public interface MessageStore {
     /**
      * Return how much the slave falls behind.
      *
+     * 返回从节点落后多少
+     *
      * @return number of bytes that slave falls behind.
      */
     long slaveFallBehindMuch();
@@ -312,6 +323,8 @@ public interface MessageStore {
 
     /**
      * Get number of the bytes that have been stored in commit log and not yet dispatched to consume queue.
+     *
+     * 翻译后的意思： 获取已存储在提交日志中但尚未分派到消费队列的字节数
      *
      * @return number of the bytes to dispatch.
      */

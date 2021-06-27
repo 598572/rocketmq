@@ -28,6 +28,9 @@ import org.apache.rocketmq.store.config.MessageStoreConfig;
 import org.apache.rocketmq.store.util.LibC;
 import sun.nio.ch.DirectBuffer;
 
+/**
+ * 启用了 直接内存作为 mmap (磁盘文件与内存的映射) 缓存的话 会使用该类
+ */
 public class TransientStorePool {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
@@ -45,9 +48,11 @@ public class TransientStorePool {
 
     /**
      * It's a heavy init method.
+     * 这是一个繁重的 init 方法。
      */
     public void init() {
         for (int i = 0; i < poolSize; i++) {
+            //分配 堆外内存 即直接内存
             ByteBuffer byteBuffer = ByteBuffer.allocateDirect(fileSize);
 
             final long address = ((DirectBuffer) byteBuffer).address();
@@ -65,13 +70,13 @@ public class TransientStorePool {
             LibC.INSTANCE.munlock(pointer, new NativeLong(fileSize));
         }
     }
-
+    //返回缓冲区
     public void returnBuffer(ByteBuffer byteBuffer) {
         byteBuffer.position(0);
         byteBuffer.limit(fileSize);
         this.availableBuffers.offerFirst(byteBuffer);
     }
-
+    //借用缓冲区
     public ByteBuffer borrowBuffer() {
         ByteBuffer buffer = availableBuffers.pollFirst();
         if (availableBuffers.size() < poolSize * 0.4) {

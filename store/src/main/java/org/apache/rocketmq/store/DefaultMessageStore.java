@@ -124,6 +124,7 @@ public class DefaultMessageStore implements MessageStore {
         this.brokerConfig = brokerConfig;
         this.messageStoreConfig = messageStoreConfig;
         this.brokerStatsManager = brokerStatsManager;
+        //可以看到 allocateMappedFileService是在这里初始化的 !!!!!!!!!!!!!!!!!!!
         this.allocateMappedFileService = new AllocateMappedFileService(this);
         if (messageStoreConfig.isEnableDLegerCommitLog()) {
             this.commitLog = new DLedgerCommitLog(this);
@@ -157,6 +158,9 @@ public class DefaultMessageStore implements MessageStore {
         this.indexService.start();
 
         this.dispatcherList = new LinkedList<>();
+
+        //初始化时候 构建 分发调度队列 (一个是 CommitLogDispatcherBuildConsumeQueue负责 分发到 consumeQueue文件
+        //另外个是 CommitLogDispatcherBuildIndex 负责分发到 index文件)
         this.dispatcherList.addLast(new CommitLogDispatcherBuildConsumeQueue());
         this.dispatcherList.addLast(new CommitLogDispatcherBuildIndex());
 
@@ -189,7 +193,7 @@ public class DefaultMessageStore implements MessageStore {
                 result = result && this.scheduleMessageService.load();
             }
 
-            // load Commit Log
+            // load Commit Log //初始化 commitLog  其实是 初始化 mappedFileQueue
             result = result && this.commitLog.load();
 
             // load Consume Queue
@@ -218,6 +222,9 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     /**
+     * 消息存储组件初始化过程
+     *
+     *
      * @throws Exception
      */
     public void start() throws Exception {
@@ -228,14 +235,22 @@ public class DefaultMessageStore implements MessageStore {
         }
 
         lockFile.getChannel().write(ByteBuffer.wrap("lock".getBytes()));
-        lockFile.getChannel().force(true);
+        lockFile.getChannel().force(true);// why 初始化时候要写入 lock这个单词到 磁盘？ TODO
         {
             /**
              * 1. Make sure the fast-forward messages to be truncated during the recovering according to the max physical offset of the commitlog;
              * 2. DLedger committedPos may be missing, so the maxPhysicalPosInLogicQueue maybe bigger that maxOffset returned by DLedgerCommitLog, just let it go;
              * 3. Calculate the reput offset according to the consume queue;
              * 4. Make sure the fall-behind messages to be dispatched before starting the commitlog, especially when the broker role are automatically changed.
+             *
+             * 1. 根据commitlog的最大物理偏移量确定恢复过程中要截断的快进消息；
+             * 2. DLedger commitedPos 可能缺失，所以maxPhysicalPosInLogicQueue 可能比DLedgerCommitLog 返回的maxOffset 大；
+             * 3、根据消费队列计算reput offset；
+             * 4. 确保在启动 commitlog 之前发送后备消息，特别是当代理角色自动更改时。
+             *
+             *  what? todo
              */
+            // 处理 maxPhysicalPosInLogicQueue 的值  翻译为 : 逻辑队列中的最大物理位置
             long maxPhysicalPosInLogicQueue = commitLog.getMinOffset();
             for (ConcurrentMap<Integer, ConsumeQueue> maps : this.consumeQueueTable.values()) {
                 for (ConsumeQueue logic : maps.values()) {
@@ -256,17 +271,29 @@ public class DefaultMessageStore implements MessageStore {
                  *
                  * All the conditions has the same in common that the maxPhysicalPosInLogicQueue should be 0.
                  * If the maxPhysicalPosInLogicQueue is gt 0, there maybe something wrong.
+                 *
+                 * 这发生在以下情况： 1. 如果有人删除了所有消耗队列文件或磁盘损坏。
+                 * 2. 启动一个新代理，并从其他代理复制提交日志。
+                 * 所有条件都有一个共同点，即 maxPhysicalPosInLogicQueue 应为 0。如果 maxPhysicalPosInLogicQueue > 0，则可能有问题。
+                 *
                  */
                 log.warn("[TooSmallCqOffset] maxPhysicalPosInLogicQueue={} clMinOffset={}", maxPhysicalPosInLogicQueue, this.commitLog.getMinOffset());
             }
             log.info("[SetReputOffset] maxPhysicalPosInLogicQueue={} clMinOffset={} clMaxOffset={} clConfirmedOffset={}",
                 maxPhysicalPosInLogicQueue, this.commitLog.getMinOffset(), this.commitLog.getMaxOffset(), this.commitLog.getConfirmOffset());
+            //设置起始值   逻辑队列中的最大物理位置 从这个位置开始分发消息到 indexFile 或者consumerQueue
             this.reputMessageService.setReputFromOffset(maxPhysicalPosInLogicQueue);
+
+            // 消息分发操作，启动新线程来处理
             this.reputMessageService.start();
 
             /**
              *  1. Finish dispatching the messages fall behind, then to start other services.
              *  2. DLedger committedPos may be missing, so here just require dispatchBehindBytes <= 0
+             *
+             *  1. 调度完落后的消息，再启动其他服务。
+             *  2. DLedgermittedPos 可能缺失，所以这里只需要 dispatchBehindBytes <= 0
+             *
              */
             while (true) {
                 if (dispatchBehindBytes() <= 0) {
@@ -414,6 +441,12 @@ public class DefaultMessageStore implements MessageStore {
         return PutMessageStatus.PUT_OK;
     }
 
+    /**
+     * 异步存储消息
+     *
+     * @param msg MessageInstance to store
+     * @return
+     */
     @Override
     public CompletableFuture<PutMessageResult> asyncPutMessage(MessageExtBrokerInner msg) {
         PutMessageStatus checkStoreStatus = this.checkStoreStatus();
@@ -427,6 +460,7 @@ public class DefaultMessageStore implements MessageStore {
         }
 
         long beginTime = this.getSystemClock().now();
+        //异步存储消息 重要 !!!!!!!!!!!
         CompletableFuture<PutMessageResult> putResultFuture = this.commitLog.asyncPutMessage(msg);
 
         putResultFuture.thenAccept((result) -> {
@@ -474,22 +508,33 @@ public class DefaultMessageStore implements MessageStore {
         return resultFuture;
     }
 
+    /**
+     * 存储消息 持久化 !!!!!!!!!!!!!!!
+     *
+     * @param msg Message instance to store
+     * @return
+     */
     @Override
     public PutMessageResult putMessage(MessageExtBrokerInner msg) {
+        //检测存储状态
         PutMessageStatus checkStoreStatus = this.checkStoreStatus();
+        //存储已经存储过 那么直接返回
         if (checkStoreStatus != PutMessageStatus.PUT_OK) {
             return new PutMessageResult(checkStoreStatus, null);
         }
 
         PutMessageStatus msgCheckStatus = this.checkMessage(msg);
+        //检测消息是否非法 非法的直接返回
         if (msgCheckStatus == PutMessageStatus.MESSAGE_ILLEGAL) {
             return new PutMessageResult(msgCheckStatus, null);
         }
 
         long beginTime = this.getSystemClock().now();
+        //保存到磁盘  commitLog   持久化消息 重点来了  !!!!!!!!!!!!!
         PutMessageResult result = this.commitLog.putMessage(msg);
         long elapsedTime = this.getSystemClock().now() - beginTime;
         if (elapsedTime > 500) {
+            //用时比较长的话 打印个warn日志
             log.warn("not in lock elapsed time(ms)={}, bodyLength={}", elapsedTime, msg.getBody().length);
         }
 
@@ -552,6 +597,17 @@ public class DefaultMessageStore implements MessageStore {
         return commitLog;
     }
 
+    /**
+     * 从  ConsumeQueue 获取消息 根据传入的这堆参数
+     *
+     * @param group Consumer group that launches this query.
+     * @param topic Topic to query.
+     * @param queueId Queue ID to query.
+     * @param offset Logical offset to start from.
+     * @param maxMsgNums Maximum count of messages to query.
+     * @param messageFilter Message filter used to screen desired messages.
+     * @return
+     */
     public GetMessageResult getMessage(final String group, final String topic, final int queueId, final long offset,
         final int maxMsgNums,
         final MessageFilter messageFilter) {
@@ -575,12 +631,13 @@ public class DefaultMessageStore implements MessageStore {
         GetMessageResult getResult = new GetMessageResult();
 
         final long maxOffsetPy = this.commitLog.getMaxOffset();
-
+        //根据 topic获取 map , 再根据queue获取 对应的 consumequeue
         ConsumeQueue consumeQueue = findConsumeQueue(topic, queueId);
         if (consumeQueue != null) {
+            //最大和最小的 offset
             minOffset = consumeQueue.getMinOffsetInQueue();
             maxOffset = consumeQueue.getMaxOffsetInQueue();
-
+            //一堆校验
             if (maxOffset == 0) {
                 status = GetMessageStatus.NO_MESSAGE_IN_QUEUE;
                 nextBeginOffset = nextOffsetCorrection(offset, 0);
@@ -598,6 +655,7 @@ public class DefaultMessageStore implements MessageStore {
                     nextBeginOffset = nextOffsetCorrection(offset, maxOffset);
                 }
             } else {
+                //获取数据 从 consumequeue ， 根据指定的 offset  (本质是 获取 mappendFile 从 mappendFiles队列里边)
                 SelectMappedBufferResult bufferConsumeQueue = consumeQueue.getIndexBuffer(offset);
                 if (bufferConsumeQueue != null) {
                     try {
@@ -610,6 +668,8 @@ public class DefaultMessageStore implements MessageStore {
                         final int maxFilterMessageCount = Math.max(16000, maxMsgNums * ConsumeQueue.CQ_STORE_UNIT_SIZE);
                         final boolean diskFallRecorded = this.messageStoreConfig.isDiskFallRecorded();
                         ConsumeQueueExt.CqExtUnit cqExtUnit = new ConsumeQueueExt.CqExtUnit();
+
+                        //计算在 commitlog的 索引位置和长度
                         for (; i < bufferConsumeQueue.getSize() && i < maxFilterMessageCount; i += ConsumeQueue.CQ_STORE_UNIT_SIZE) {
                             long offsetPy = bufferConsumeQueue.getByteBuffer().getLong();
                             int sizePy = bufferConsumeQueue.getByteBuffer().getInt();
@@ -641,7 +701,7 @@ public class DefaultMessageStore implements MessageStore {
                                     isTagsCodeLegal = false;
                                 }
                             }
-
+                            //消息过滤 相关
                             if (messageFilter != null
                                 && !messageFilter.isMatchedByConsumeQueue(isTagsCodeLegal ? tagsCode : null, extRet ? cqExtUnit : null)) {
                                 if (getResult.getBufferTotalSize() == 0) {
@@ -650,7 +710,7 @@ public class DefaultMessageStore implements MessageStore {
 
                                 continue;
                             }
-
+                            //重点来了 从 commitlog获取 消息 根据   bufferConsumeQueue.getByteBuffer中的 offset和 size !!!!!!!!!!!!!!!1
                             SelectMappedBufferResult selectResult = this.commitLog.getMessage(offsetPy, sizePy);
                             if (null == selectResult) {
                                 if (getResult.getBufferTotalSize() == 0) {
@@ -711,7 +771,7 @@ public class DefaultMessageStore implements MessageStore {
         }
         long elapsedTime = this.getSystemClock().now() - beginTime;
         this.storeStatsService.setGetMessageEntireTimeMax(elapsedTime);
-
+        //响应消息  返回下一个消息的offset status 等信息 至此 消息投递流程走 完  !!!!!!!!!!!!!!!!!
         getResult.setStatus(status);
         getResult.setNextBeginOffset(nextBeginOffset);
         getResult.setMaxOffset(maxOffset);
@@ -1208,7 +1268,18 @@ public class DefaultMessageStore implements MessageStore {
         return null;
     }
 
+    /**
+     * 根据 topic和 queueId获取消息 从 ConsumeQueue中
+     *
+     * 先根据 topic获取 consumequeue map key 为 queueId value是 consumequeue
+     * 根据queue获取指定的 consumequeue
+     *
+     * @param topic
+     * @param queueId
+     * @return
+     */
     public ConsumeQueue findConsumeQueue(String topic, int queueId) {
+        //先根据 topic获取 consumequeue 的 map， key 为 queueId value是 consumequeue
         ConcurrentMap<Integer, ConsumeQueue> map = consumeQueueTable.get(topic);
         if (null == map) {
             ConcurrentMap<Integer, ConsumeQueue> newMap = new ConcurrentHashMap<Integer, ConsumeQueue>(128);
@@ -1219,8 +1290,9 @@ public class DefaultMessageStore implements MessageStore {
                 map = newMap;
             }
         }
-
+        //根据queue获取指定的 consumequeue
         ConsumeQueue logic = map.get(queueId);
+        //没有 创建个并添加进 map中去  //有的话直接返回
         if (null == logic) {
             ConsumeQueue newLogic = new ConsumeQueue(
                 topic,
@@ -1503,14 +1575,26 @@ public class DefaultMessageStore implements MessageStore {
         return runningFlags;
     }
 
+    // 循环数据 进行分发 到 index和consumerQueue !!!!!!!!!!!!!!!!
     public void doDispatch(DispatchRequest req) {
+        // this.dispatcherList 其实只有两个 详细见 该类的构造方法
+        // 1. CommitLogDispatcherBuildConsumeQueue：写入 ConsumeQueue 文件
+        // 2. CommitLogDispatcherBuildIndex：写入 Index 文件
         for (CommitLogDispatcher dispatcher : this.dispatcherList) {
             dispatcher.dispatch(req);
         }
     }
 
+    /**
+     * 根据topic和 queueId找到对应的 ConsumerQueue  并且 写入到 consumerQueue
+     * (本质上也是 将数据 添加到 ByteBuffer后 将ByteBuffer添加到 FileChannel 可以简单理解 filechannel  就是把数据写到 pagecache )  但是 index不一样 index是创建个异步线程 调用force方法刷盘的
+     *
+     * @param dispatchRequest
+     */
     public void putMessagePositionInfo(DispatchRequest dispatchRequest) {
+        //根据topic和 queueId找到对应的 ConsumerQueue
         ConsumeQueue cq = this.findConsumeQueue(dispatchRequest.getTopic(), dispatchRequest.getQueueId());
+        //添加到缓冲区  mmap  page cache
         cq.putMessagePositionInfoWrapper(dispatchRequest);
     }
 
@@ -1565,12 +1649,18 @@ public class DefaultMessageStore implements MessageStore {
 
     class CommitLogDispatcherBuildConsumeQueue implements CommitLogDispatcher {
 
+        /**
+         * 进行消息分发 到 consumerQueue  但是 index不一样 index是创建个异步线程 调用force方法刷盘的
+         *
+         * @param request
+         */
         @Override
         public void dispatch(DispatchRequest request) {
             final int tranType = MessageSysFlag.getTransactionValue(request.getSysFlag());
             switch (tranType) {
                 case MessageSysFlag.TRANSACTION_NOT_TYPE:
                 case MessageSysFlag.TRANSACTION_COMMIT_TYPE:
+                    // 进行消息分发
                     DefaultMessageStore.this.putMessagePositionInfo(request);
                     break;
                 case MessageSysFlag.TRANSACTION_PREPARED_TYPE:
@@ -1580,6 +1670,10 @@ public class DefaultMessageStore implements MessageStore {
         }
     }
 
+    /**
+     * 将消息存储到 index文件 也是写数据到 Bytebuffer 然后写到 FileChannel 通过OS(操作系统)的 pdflush()方法来保证 刷盘
+     * 纠正!!!!!!!!!!!!!!!!!!!!!  这个不是通过操作系统来刷盘的 跟了下里边的方法 他是调用了 force来实现刷盘的 !!!!!!!!!!!!!!注意
+     */
     class CommitLogDispatcherBuildIndex implements CommitLogDispatcher {
 
         @Override
@@ -1882,6 +1976,9 @@ public class DefaultMessageStore implements MessageStore {
         }
     }
 
+    /**
+     * 负责将commitlog写入 consumerqueue 和 indexFile
+     */
     class ReputMessageService extends ServiceThread {
 
         private volatile long reputFromOffset = 0;
@@ -1919,7 +2016,11 @@ public class DefaultMessageStore implements MessageStore {
             return this.reputFromOffset < DefaultMessageStore.this.commitLog.getMaxOffset();
         }
 
+        /**
+         * 消息分发处理方法 !!!!!!!!!!!!!!!!!!!!!!! 重点看
+         */
         private void doReput() {
+            // 处理 reputFromOffset
             if (this.reputFromOffset < DefaultMessageStore.this.commitLog.getMinOffset()) {
                 log.warn("The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate that the dispatch behind too much and the commitlog has expired.",
                     this.reputFromOffset, DefaultMessageStore.this.commitLog.getMinOffset());
@@ -1931,21 +2032,23 @@ public class DefaultMessageStore implements MessageStore {
                     && this.reputFromOffset >= DefaultMessageStore.this.getConfirmOffset()) {
                     break;
                 }
-
+                // 从CommitLog文件中 获取需要进行转发的消息
                 SelectMappedBufferResult result = DefaultMessageStore.this.commitLog.getData(reputFromOffset);
                 if (result != null) {
                     try {
                         this.reputFromOffset = result.getStartOffset();
 
                         for (int readSize = 0; readSize < result.getSize() && doNext; ) {
+                            // 检验数据 并返回消息分发的 调度者  DispatchRequest 对象
                             DispatchRequest dispatchRequest =
                                 DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(result.getByteBuffer(), false, false);
                             int size = dispatchRequest.getBufferSize() == -1 ? dispatchRequest.getMsgSize() : dispatchRequest.getBufferSize();
 
                             if (dispatchRequest.isSuccess()) {
                                 if (size > 0) {
+                                    // 使用调度器进行分发 !!!!!!!!!!!!!!!! 重要
                                     DefaultMessageStore.this.doDispatch(dispatchRequest);
-
+                                    //如果是主节点 并且开启了长轮询  那么 调用NotifyMessageArrivingListener的arriving方法 将获取的消息 立马返回给consumer
                                     if (BrokerRole.SLAVE != DefaultMessageStore.this.getMessageStoreConfig().getBrokerRole()
                                         && DefaultMessageStore.this.brokerConfig.isLongPollingEnable()) {
                                         DefaultMessageStore.this.messageArrivingListener.arriving(dispatchRequest.getTopic(),
@@ -1976,6 +2079,8 @@ public class DefaultMessageStore implements MessageStore {
                                     doNext = false;
                                     // If user open the dledger pattern or the broker is master node,
                                     // it will not ignore the exception and fix the reputFromOffset variable
+
+                                    // 如果用户打开 dledger 模式或者 broker 是主节点，它不会忽略异常并修复 reputFromOffset 变量
                                     if (DefaultMessageStore.this.getMessageStoreConfig().isEnableDLegerCommitLog() ||
                                         DefaultMessageStore.this.brokerConfig.getBrokerId() == MixAll.MASTER_ID) {
                                         log.error("[BUG]dispatch message to consume queue error, COMMITLOG OFFSET: {}",
@@ -1994,6 +2099,9 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        /**
+         * 消息分发线程
+         */
         @Override
         public void run() {
             DefaultMessageStore.log.info(this.getServiceName() + " service started");
@@ -2001,6 +2109,7 @@ public class DefaultMessageStore implements MessageStore {
             while (!this.isStopped()) {
                 try {
                     Thread.sleep(1);
+                    //调用 doReput() 方法 进行消息分发
                     this.doReput();
                 } catch (Exception e) {
                     DefaultMessageStore.log.warn(this.getServiceName() + " service has exception. ", e);

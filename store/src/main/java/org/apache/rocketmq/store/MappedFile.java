@@ -41,6 +41,12 @@ import org.apache.rocketmq.store.config.FlushDiskType;
 import org.apache.rocketmq.store.util.LibC;
 import sun.nio.ch.DirectBuffer;
 
+/**
+ * 我个人感觉这是CommitLog文件的真实样子 后续在研究吧 TODO 这个类很重要
+ * (内存映射的详细分析见这个)  博文 : https://itzones.cn/2019/07/19/RocketMQ%E5%86%85%E5%AD%98%E6%98%A0%E5%B0%84/
+ *
+ * nio 零拷贝的运用 消息刷盘的真正实现者  见 flush 方法 防止消息不丢失的奥秘 就在这里边了
+ */
 public class MappedFile extends ReferenceResource {
     public static final int OS_PAGE_SIZE = 1024 * 4;
     protected static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
@@ -54,13 +60,16 @@ public class MappedFile extends ReferenceResource {
     protected int fileSize;
     protected FileChannel fileChannel;
     /**
-     * Message will put to here first, and then reput to FileChannel if writeBuffer is not null.
+     * Message will put to here first, and then reput to FileChannel if writeBuffer is not null.\
+     *
+     * 消息会先放到这里，如果 writeBuffer 不为空，再返回到 FileChannel。
      */
     protected ByteBuffer writeBuffer = null;
     protected TransientStorePool transientStorePool = null;
     private String fileName;
     private long fileFromOffset;
     private File file;
+    //重要 mmap
     private MappedByteBuffer mappedByteBuffer;
     private volatile long storeTimestamp = 0;
     private boolean firstCreateInQueue = false;
@@ -69,6 +78,7 @@ public class MappedFile extends ReferenceResource {
     }
 
     public MappedFile(final String fileName, final int fileSize) throws IOException {
+        //init 文件与内存映射 mmap
         init(fileName, fileSize);
     }
 
@@ -148,17 +158,27 @@ public class MappedFile extends ReferenceResource {
         this.transientStorePool = transientStorePool;
     }
 
+    /**
+     * 构建 MappendFile对象 !!!!!!!!!!!!!!!!!!!!!!!!重要
+     * 初始化 文件与内存的映射关系 !!!!!!!!!!!!!!!!!!!!!!!!mmap的运用 (java的实现为 MappedByteBuffer 类)
+     *
+     * @param fileName
+     * @param fileSize
+     * @throws IOException
+     */
     private void init(final String fileName, final int fileSize) throws IOException {
         this.fileName = fileName;
         this.fileSize = fileSize;
         this.file = new File(fileName);
         this.fileFromOffset = Long.parseLong(this.file.getName());
         boolean ok = false;
-
+        //校验文件是否存在 不存在创建
         ensureDirOK(this.file.getParent());
 
         try {
+            //随机读写
             this.fileChannel = new RandomAccessFile(this.file, "rw").getChannel();
+            //初始化 文件与内存的映射关系 !!!!!!!!!!!!!!!!!!!!!!!!mmap的运用 (java的实现为 MappedByteBuffer 类)
             this.mappedByteBuffer = this.fileChannel.map(MapMode.READ_WRITE, 0, fileSize);
             TOTAL_MAPPED_VIRTUAL_MEMORY.addAndGet(fileSize);
             TOTAL_MAPPED_FILES.incrementAndGet();
@@ -196,23 +216,45 @@ public class MappedFile extends ReferenceResource {
         return appendMessagesInner(messageExtBatch, cb);
     }
 
+    /**
+     * 这里实际上时写入到缓冲区 不是真正的刷盘
+     * @param messageExt
+     * @param cb
+     * @return
+     */
     public AppendMessageResult appendMessagesInner(final MessageExt messageExt, final AppendMessageCallback cb) {
         assert messageExt != null;
         assert cb != null;
 
+        //获取当前的写入位置
         int currentPos = this.wrotePosition.get();
 
+        //当前位置小于文件长度
         if (currentPos < this.fileSize) {
+            //NIO的运用 !!!!!!!!!!!!!!!  ; slice() 创建一个新的字节缓冲区，其内容是此缓冲区内容的共享子序列。
+            /*
+            ByteBuffer 的 slice()方法释义:
+
+            创建一个分片缓冲区。分片缓冲区与主缓冲区共享数据。
+            分配的起始位置是主缓冲区的position位置
+            容量为limit-position。
+            分片缓冲区无法看到主缓冲区positoin之前的元素。
+             */
             ByteBuffer byteBuffer = writeBuffer != null ? writeBuffer.slice() : this.mappedByteBuffer.slice();
+            //position() 设置此缓冲区的位置
             byteBuffer.position(currentPos);
             AppendMessageResult result;
+            //判断消息类型
             if (messageExt instanceof MessageExtBrokerInner) {
+                //当消息类型为单个时候 写入缓冲区
                 result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, (MessageExtBrokerInner) messageExt);
             } else if (messageExt instanceof MessageExtBatch) {
+                //当消息类型为批量时候 写入缓冲区
                 result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, (MessageExtBatch) messageExt);
             } else {
                 return new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR);
             }
+            //增加 position
             this.wrotePosition.addAndGet(result.getWroteBytes());
             this.storeTimestamp = result.getStoreTimestamp();
             return result;
@@ -225,6 +267,11 @@ public class MappedFile extends ReferenceResource {
         return this.fileFromOffset;
     }
 
+    /**
+     * 添加数据到缓存区  mmap  或者说是 page cache
+     * @param data
+     * @return
+     */
     public boolean appendMessage(final byte[] data) {
         int currentPos = this.wrotePosition.get();
 
@@ -244,6 +291,8 @@ public class MappedFile extends ReferenceResource {
 
     /**
      * Content of data from offset to offset + length will be wrote to file.
+     *
+     * 从偏移量到 偏移量+长度的数据内容将写入文件。
      *
      * @param offset The offset of the subarray to be used.
      * @param length The length of the subarray to be used.
@@ -266,7 +315,12 @@ public class MappedFile extends ReferenceResource {
     }
 
     /**
-     * @return The current flushed position
+     * ********** 消息刷盘(同步刷盘) 的  真正刷盘操作 NIO (零拷贝) 的运用，  重点的不能再重点了 !!!!!!!!!!!!!!!!!! 与磁盘的交互 TODO NIO zero copy  我将揭穿你 !!!!!!!!!!!!!!!
+     * 防止消息丢失的奥秘 *****************
+     *
+     *
+     *
+     * @return The current flushed position 返回当前刷新的位置
      */
     public int flush(final int flushLeastPages) {
         if (this.isAbleToFlush(flushLeastPages)) {
@@ -275,9 +329,28 @@ public class MappedFile extends ReferenceResource {
 
                 try {
                     //We only append data to fileChannel or mappedByteBuffer, never both.
+                    //我们只将数据附加到 fileChannel 或mappedByteBuffer，绝不会二者都用 （只会有一个）。 !!!!!!!!!!!!!!!!!
+                    //看了 mmap和 sendfile后 就明白了 俩都是零拷贝的实现者 肯定只选一个就行了 呵呵
                     if (writeBuffer != null || this.fileChannel.position() != 0) {
+                        /**
+                         * fileChannel.force()方法解释:
+                         *
+                         * 强制将此通道文件的任何更新写入磁盘。
+                         * 如果此通道的文件驻留在本地存储设备上，则当此方法返回时，可以保证自创建此通道或自上次调用此方法以来对文件所做的所有更改都将写入该设备。 这对于确保在系统崩溃时不会丢失关键信息非常有用。
+                         * 如果文件不在本地设备上，则不提供此类保证。
+                         * metaData参数可用于限制此方法需要执行的 I/O 操作数。 为该参数传递false表示只需要将文件内容的更新写入存储； 传递true表示必须写入对文件内容和元数据的更新，这通常至少需要再进行一次 I/O 操作。 此参数是否实际有任何影响取决于底层操作系统，因此未指定。
+                         * 调用此方法可能会导致发生 I/O 操作，即使通道只是为了读取而打开。 例如，某些操作系统将最后访问时间作为文件元数据的一部分进行维护，并且每当读取文件时都会更新该时间。 这是否实际完成取决于系统，因此未指定。
+                         * 此方法仅保证强制通过此类中定义的方法对该频道的文件进行更改。 它可能会也可能不会强制更改通过修改调用map方法获得的mapped byte buffer的内容。 调用映射字节缓冲区的force方法将强制写入对缓冲区内容所做的更改。
+                         *
+                         * 参数：
+                         * metaData – 如果为true，则需要此方法来强制更改要写入存储的文件内容和元数据； 否则，它只需要强制写入内容更改
+                         */
+                        //在实际开发时候 尽量别频繁使用  这玩意频繁使用 将于传统IO没啥区别了
+
+                        //将通道的数据强制刷新到磁盘 与磁盘交互的操作 真正的刷盘操作
                         this.fileChannel.force(false);
                     } else {
+                        // 如果ByteBuffer是空的(说明使用的mmap ) 那么使用 mmap的force方法 强刷到磁盘
                         this.mappedByteBuffer.force();
                     }
                 } catch (Throwable e) {
@@ -294,13 +367,20 @@ public class MappedFile extends ReferenceResource {
         return this.getFlushedPosition();
     }
 
+    /**
+     * 异步刷盘 只是提交到缓冲区 (即内存映射区 mmap )
+     * @param commitLeastPages
+     * @return
+     */
     public int commit(final int commitLeastPages) {
         if (writeBuffer == null) {
             //no need to commit data to file channel, so just regard wrotePosition as committedPosition.
             return this.wrotePosition.get();
         }
+        //判断是否达到提交条件 !!!!!!!!
         if (this.isAbleToCommit(commitLeastPages)) {
             if (this.hold()) {
+                //将ByteBuffer 写入 FileChannel 然后返回刷盘成功 就平时说的ACK
                 commit0(commitLeastPages);
                 this.release();
             } else {
@@ -308,7 +388,7 @@ public class MappedFile extends ReferenceResource {
             }
         }
 
-        // All dirty data has been committed to FileChannel.
+        // All dirty data has been committed to FileChannel.  所有脏数据都已提交到 FileChannel。
         if (writeBuffer != null && this.transientStorePool != null && this.fileSize == this.committedPosition.get()) {
             this.transientStorePool.returnBuffer(writeBuffer);
             this.writeBuffer = null;
@@ -327,6 +407,7 @@ public class MappedFile extends ReferenceResource {
                 byteBuffer.position(lastCommittedPosition);
                 byteBuffer.limit(writePos);
                 this.fileChannel.position(lastCommittedPosition);
+                //非真正意义上的刷盘 只是将其添加到 内存映射区  mmap
                 this.fileChannel.write(byteBuffer);
                 this.committedPosition.set(writePos);
             } catch (Throwable e) {
@@ -350,14 +431,20 @@ public class MappedFile extends ReferenceResource {
         return write > flush;
     }
 
+    /**
+     *  批量commit，每次累计一组page之后才commit一次: 见 https://lishoubo.github.io/2017/09/27/MappedByteBuffer%E7%9A%84%E4%B8%80%E7%82%B9%E4%BC%98%E5%8C%96/
+     *
+     * @param commitLeastPages
+     * @return
+     */
     protected boolean isAbleToCommit(final int commitLeastPages) {
         int flush = this.committedPosition.get();
         int write = this.wrotePosition.get();
-
+        //当前文件满了 那么立即刷盘
         if (this.isFull()) {
             return true;
         }
-
+        //如果  满足这个 也立即刷盘
         if (commitLeastPages > 0) {
             return ((write / OS_PAGE_SIZE) - (flush / OS_PAGE_SIZE)) >= commitLeastPages;
         }
@@ -374,9 +461,26 @@ public class MappedFile extends ReferenceResource {
     }
 
     public boolean isFull() {
+        //判断文件是否满了 根据 position
         return this.fileSize == this.wrotePosition.get();
     }
 
+    /**
+     *  获取磁盘文件 根据  byteBuffer.slice() ； 要理解这个方法  主要需要理解 byteBuffer.slice()这个方法
+     *
+     * byteBuffer.slice()
+     * 方法描述:
+     *
+     * 创建一个新的字节缓冲区，其内容是此缓冲区内容的共享子序列。
+     * 新缓冲区的内容将从该缓冲区的当前位置开始。 对该缓冲区内容的更改将在新缓冲区中可见，反之亦然； 两个缓冲区的位置、限制和标记值将是独立的。
+     * 新缓冲区的位置将为零，其容量和限制将是该缓冲区中剩余的字节数，其标记将是未定义的。 当且仅当此缓冲区为直接缓冲区时，新缓冲区为直接缓冲区，且仅当此缓冲区为只读时，新缓冲区为只读缓冲区。
+     * 返回：
+     * 新的字节缓冲区
+     *
+     * @param pos
+     * @param size
+     * @return
+     */
     public SelectMappedBufferResult selectMappedBuffer(int pos, int size) {
         int readPosition = getReadPosition();
         if ((pos + size) <= readPosition) {
@@ -472,6 +576,8 @@ public class MappedFile extends ReferenceResource {
 
     /**
      * @return The max position which have valid data
+     *
+     *  有效数据的最大位置
      */
     public int getReadPosition() {
         return this.writeBuffer == null ? this.wrotePosition.get() : this.committedPosition.get();

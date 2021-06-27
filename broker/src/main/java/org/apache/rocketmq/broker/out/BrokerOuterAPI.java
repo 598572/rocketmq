@@ -106,7 +106,7 @@ public class BrokerOuterAPI {
         for (String addr : addrArray) {
             lst.add(addr);
         }
-
+        //更新 NameServerAdd 地址
         this.remotingClient.updateNameServerAddressList(lst);
     }
 
@@ -123,6 +123,7 @@ public class BrokerOuterAPI {
         final boolean compressed) {
 
         final List<RegisterBrokerResult> registerBrokerResultList = new CopyOnWriteArrayList<>();
+        //获取所有nameServer地址
         List<String> nameServerAddressList = this.remotingClient.getNameServerAddressList();
         if (nameServerAddressList != null && nameServerAddressList.size() > 0) {
 
@@ -138,9 +139,11 @@ public class BrokerOuterAPI {
             requestBody.setTopicConfigSerializeWrapper(topicConfigWrapper);
             requestBody.setFilterServerList(filterServerList);
             final byte[] body = requestBody.encode(compressed);
+            //可以理解为 加签消息体   个人理解哈
             final int bodyCrc32 = UtilAll.crc32(body);
             requestHeader.setBodyCrc32(bodyCrc32);
             final CountDownLatch countDownLatch = new CountDownLatch(nameServerAddressList.size());
+            // 遍历所有的nameServer,逐一发送注册请求
             for (final String namesrvAddr : nameServerAddressList) {
                 brokerOuterExecutor.execute(new Runnable() {
                     @Override
@@ -162,6 +165,7 @@ public class BrokerOuterAPI {
             }
 
             try {
+                //使用了 countDownLatch 666 get了 当countDownLatch的值为0时候 才会执行任务 否则就会一直等待 会产生死锁 所以必须在 finally中 countDown !!!!!!!!
                 countDownLatch.await(timeoutMills, TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
             }
@@ -170,6 +174,21 @@ public class BrokerOuterAPI {
         return registerBrokerResultList;
     }
 
+    /**
+     * 向nameServer 注册broker
+     * @param namesrvAddr
+     * @param oneway
+     * @param timeoutMills
+     * @param requestHeader
+     * @param body
+     * @return
+     * @throws RemotingCommandException
+     * @throws MQBrokerException
+     * @throws RemotingConnectException
+     * @throws RemotingSendRequestException
+     * @throws RemotingTimeoutException
+     * @throws InterruptedException
+     */
     private RegisterBrokerResult registerBroker(
         final String namesrvAddr,
         final boolean oneway,
@@ -178,6 +197,7 @@ public class BrokerOuterAPI {
         final byte[] body
     ) throws RemotingCommandException, MQBrokerException, RemotingConnectException, RemotingSendRequestException, RemotingTimeoutException,
         InterruptedException {
+        //可以看到 向nameServer的DefaultRequestProcessor#processRequest方法  发送RequestCode为REGISTER_BROKER的请求 即注册 broker !!!!!!!
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.REGISTER_BROKER, requestHeader);
         request.setBody(body);
 
@@ -217,6 +237,7 @@ public class BrokerOuterAPI {
         final String brokerName,
         final long brokerId
     ) {
+        // 获取所有的 nameServer，遍历发送注销消息
         List<String> nameServerAddressList = this.remotingClient.getNameServerAddressList();
         if (nameServerAddressList != null) {
             for (String namesrvAddr : nameServerAddressList) {
@@ -242,8 +263,10 @@ public class BrokerOuterAPI {
         requestHeader.setBrokerId(brokerId);
         requestHeader.setBrokerName(brokerName);
         requestHeader.setClusterName(clusterName);
+        // 发送的注销消息：RequestCode.UNREGISTER_BROKER
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.UNREGISTER_BROKER, requestHeader);
-
+        //最终调用的是RemotingClient#invokeSync进行消息发送，
+        //请求code是RequestCode.UNREGISTER_BROKER，这就与NameServer接收broker的注销消息对应上了。
         RemotingCommand response = this.remotingClient.invokeSync(namesrvAddr, request, 3000);
         assert response != null;
         switch (response.getCode()) {
@@ -257,6 +280,25 @@ public class BrokerOuterAPI {
         throw new MQBrokerException(response.getCode(), response.getRemark(), brokerAddr);
     }
 
+    /**
+     * 主流程梳理：
+     *
+     * 先是遍历所有的nameServer（通过 remotingClient.getNameServerAddressList()获取 ），向每个nameServer都发送一条code为RequestCode.QUERY_DATA_VERSION的参数，
+     * 参数为当前broker的DataVersion（从topicConfigWrapper.getDataVersion()方法获取的当前的DataVersion ），当nameServer收到消息后，
+     * 就返回nameServer中保存的、与当前broker对应的DataVersion，当两者版本不相等时，就表明当前broker发生了变化，需要重新注册。
+     *
+     * 这个方法使用了 CopyOnWriteArrayList和 CountDownLatch 有时间研究下 不能停留在理论啊 hzz
+     *
+     * ****另外注意 这里发送请求的目标对象是 nameServer的 DefaultRequestProcessor # processRequest这个方法 记得吗？？哈哈 switch大法好那个****
+     *
+     * @param clusterName
+     * @param brokerAddr
+     * @param brokerName
+     * @param brokerId
+     * @param topicConfigWrapper
+     * @param timeoutMills
+     * @return
+     */
     public List<Boolean> needRegister(
         final String clusterName,
         final String brokerAddr,
@@ -273,28 +315,35 @@ public class BrokerOuterAPI {
                     @Override
                     public void run() {
                         try {
+                            //****注意 这里发送请求的目标对象是 nameServer的 DefaultRequestProcessor # processRequest这个方法 记得吗？？哈哈 switch大法好那个****
                             QueryDataVersionRequestHeader requestHeader = new QueryDataVersionRequestHeader();
                             requestHeader.setBrokerAddr(brokerAddr);
                             requestHeader.setBrokerId(brokerId);
                             requestHeader.setBrokerName(brokerName);
                             requestHeader.setClusterName(clusterName);
+                            // 向nameServer发送消息，命令是 RequestCode.QUERY_DATA_VERSION 查询版本号 根据broker 相关信息
                             RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.QUERY_DATA_VERSION, requestHeader);
+                            // 把当前的 DataVersion 发到 nameServer
                             request.setBody(topicConfigWrapper.getDataVersion().encode());
+                            // 发送请求
                             RemotingCommand response = remotingClient.invokeSync(namesrvAddr, request, timeoutMills);
                             DataVersion nameServerDataVersion = null;
                             Boolean changed = false;
                             switch (response.getCode()) {
                                 case ResponseCode.SUCCESS: {
+                                    //查询nameServer 成功的话
                                     QueryDataVersionResponseHeader queryDataVersionResponseHeader =
                                         (QueryDataVersionResponseHeader) response.decodeCommandCustomHeader(QueryDataVersionResponseHeader.class);
                                     changed = queryDataVersionResponseHeader.getChanged();
                                     byte[] body = response.getBody();
                                     if (body != null) {
                                         nameServerDataVersion = DataVersion.decode(body, DataVersion.class);
+                                        //将当前和远程的做对比 不一样说明改变了 返回true
                                         if (!topicConfigWrapper.getDataVersion().equals(nameServerDataVersion)) {
                                             changed = true;
                                         }
                                     }
+                                    //没查到或者changed是true的话 也说明改变了
                                     if (changed == null || changed) {
                                         changedList.add(Boolean.TRUE);
                                     }
@@ -302,11 +351,13 @@ public class BrokerOuterAPI {
                                 default:
                                     break;
                             }
+                            //打印版本号改变日志
                             log.warn("Query data version from name server {} OK,changed {}, broker {},name server {}", namesrvAddr, changed, topicConfigWrapper.getDataVersion(), nameServerDataVersion == null ? "" : nameServerDataVersion);
                         } catch (Exception e) {
                             changedList.add(Boolean.TRUE);
                             log.error("Query data version from name server {}  Exception, {}", namesrvAddr, e);
                         } finally {
+                            //每次都 countDown 防止死锁
                             countDownLatch.countDown();
                         }
                     }

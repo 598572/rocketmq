@@ -54,13 +54,23 @@ public class BrokerStartup {
     public static String configFile = null;
     public static InternalLogger log;
 
+    /**
+     * broker启动入口
+     *
+     * @param args
+     */
     public static void main(String[] args) {
         start(createBrokerController(args));
     }
 
+    /**
+     * 启动 broker
+     * @param controller
+     * @return
+     */
     public static BrokerController start(BrokerController controller) {
         try {
-
+            // 启动
             controller.start();
 
             String tip = "The broker[" + controller.getBrokerConfig().getBrokerName() + ", "
@@ -107,6 +117,8 @@ public class BrokerStartup {
         try {
             //PackageConflictDetect.detectFastjson();
             Options options = ServerUtil.buildCommandlineOptions(new Options());
+            //一系列操作将 -n localhost:9876 autoCreateTopicEnable=true 转换成了 commandLine对象 此处使用了 org.apache.commons.cli.CommandLine 详见： https://developer.aliyun.com/article/43536
+            // https://iowiki.com/commons_cli/commons_cli_quick_guide.html
             commandLine = ServerUtil.parseCmdLine("mqbroker", args, buildCommandlineOptions(options),
                 new PosixParser());
             if (null == commandLine) {
@@ -160,6 +172,8 @@ public class BrokerStartup {
                 try {
                     String[] addrArray = namesrvAddr.split(";");
                     for (String addr : addrArray) {
+                        //打印下 看看这玩意是个啥 ， 这不就是 命令行的 -n localhost:9876吗？
+                        log.info("BrokerStartup#createBrokerController namesrvAddr:{}",addr);
                         RemotingUtil.string2SocketAddress(addr);
                     }
                 } catch (Exception e) {
@@ -189,7 +203,7 @@ public class BrokerStartup {
             if (messageStoreConfig.isEnableDLegerCommitLog()) {
                 brokerConfig.setBrokerId(-1);
             }
-
+            //日志相关的东西
             messageStoreConfig.setHaListenPort(nettyServerConfig.getListenPort() + 1);
             LoggerContext lc = (LoggerContext) LoggerFactory.getILoggerFactory();
             JoranConfigurator configurator = new JoranConfigurator();
@@ -219,22 +233,24 @@ public class BrokerStartup {
             MixAll.printObjectProperties(log, nettyClientConfig);
             MixAll.printObjectProperties(log, messageStoreConfig);
 
+            //创建 BrokerController控制器  主要是赋值操作
             final BrokerController controller = new BrokerController(
                 brokerConfig,
                 nettyServerConfig,
                 nettyClientConfig,
                 messageStoreConfig);
-            // remember all configs to prevent discard
+            // remember all configs to prevent discard 记住所有配置以防止丢弃
             controller.getConfiguration().registerConfig(properties);
 
             //BrokerController初始化 这个是属于重要方法 需好好看看
             boolean initResult = controller.initialize();
+            //初始化失败 退出虚拟机
             if (!initResult) {
                 controller.shutdown();
                 System.exit(-3);
             }
 
-            //jvm退出前  执行 controller.shutdown(); 大多是对线程池的 shutdown()调用;
+            //jvm退出前  执行 controller.shutdown(); 大多是对线程池的 shutdown()调用; get了
             Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
                 private volatile boolean hasShutdown = false;
                 private AtomicInteger shutdownTimes = new AtomicInteger(0);
@@ -246,6 +262,7 @@ public class BrokerStartup {
                         if (!this.hasShutdown) {
                             this.hasShutdown = true;
                             long beginTime = System.currentTimeMillis();
+                            //通知 nameServer nameServer将会各种 shutdown 来关闭资源
                             controller.shutdown();
                             long consumingTimeTotal = System.currentTimeMillis() - beginTime;
                             log.info("Shutdown hook over, consuming total time(ms): {}", consumingTimeTotal);
@@ -273,6 +290,7 @@ public class BrokerStartup {
         System.setProperty("rocketmq.namesrv.domain.subgroup", rmqAddressServerSubGroup);
     }
 
+    ////构建 c  p  m 命令对象
     private static Options buildCommandlineOptions(final Options options) {
         Option opt = new Option("c", "configFile", true, "Broker config properties file");
         opt.setRequired(false);
