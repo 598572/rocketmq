@@ -108,6 +108,8 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
 
     /**
      * Indicate whether to retry another broker on sending failure internally.
+     *
+     * 指示是否在内部发送失败时重试另一个代理。
      */
     private boolean retryAnotherBrokerWhenNotStoreOK = false;
 
@@ -196,6 +198,8 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     /**
      * Constructor specifying namespace, producer group and RPC hook.
      *
+     * 指定命名空间、组和 RPC 钩子的构造函数。
+     *
      * @param namespace Namespace for this MQ Producer instance.
      * @param producerGroup Producer group, see the name-sake field.
      * @param rpcHook RPC hook to execute per each remoting command execution.
@@ -260,6 +264,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
 
     /**
      * Start this producer instance. </p>
+     * 启动这个生产者实例。
      *
      * <strong> Much internal initializing procedures are carried out to make this instance prepared, thus, it's a must
      * to invoke this method before sending or querying messages. </strong> </p>
@@ -269,7 +274,9 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     @Override
     public void start() throws MQClientException {
         this.setProducerGroup(withNamespace(this.producerGroup));
+        //启动生产者!!!!!!
         this.defaultMQProducerImpl.start();
+        //消息轨迹 相关操作
         if (null != traceDispatcher) {
             try {
                 traceDispatcher.start(this.getNamesrvAddr(), this.getAccessChannel());
@@ -305,9 +312,13 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     /**
      * Send message in synchronous mode. This method returns only when the sending procedure totally completes. </p>
      *
+     * 以同步模式发送消息。此方法仅在发送过程完全完成时返回。
+     *
      * <strong>Warn:</strong> this method has internal retry-mechanism, that is, internal implementation will retry
      * {@link #retryTimesWhenSendFailed} times before claiming failure. As a result, multiple messages may potentially
      * delivered to broker(s). It's up to the application developers to resolve potential duplication issue.
+     *
+     * 提醒!!!!!!!!! : 该方法有内部重试机制，即内部实现会在声明失败前重试 2 次。因此，多条消息可能会传送到代理。由应用程序开发人员解决潜在的重复问题。
      *
      * @param msg Message to send.
      * @return {@link SendResult} instance to inform senders details of the deliverable, say Message ID of the message,
@@ -320,8 +331,11 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     @Override
     public SendResult send(
         Message msg) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
+        //1.检查消息
         Validators.checkMessage(msg, this);
+        //2.设置topic
         msg.setTopic(withNamespace(msg.getTopic()));
+        //3.发送
         return this.defaultMQProducerImpl.send(msg);
     }
 

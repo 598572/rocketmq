@@ -67,6 +67,8 @@ public abstract class NettyRemotingAbstract {
 
     /**
      * Semaphore to limit maximum number of on-going asynchronous requests, which protects system memory footprint.
+     *
+     * 信号量限制正在进行的异步请求的最大数量，从而保护系统内存占用。 使用 Semaphore  66666 !!!!!!!!
      */
     protected final Semaphore semaphoreAsync;
 
@@ -359,16 +361,22 @@ public abstract class NettyRemotingAbstract {
 
     /**
      * Execute callback in callback executor. If callback executor is null, run directly in current thread
+     *
+     * 处理异步消息时候的回调 !!!!!!!!!!! 重要
+     *
+     * 在回调执行器中执行回调。如果回调执行器为空，则直接在当前线程中运行
      */
     private void executeInvokeCallback(final ResponseFuture responseFuture) {
         boolean runInThisThread = false;
         ExecutorService executor = this.getCallbackExecutor();
+        //有线程池的话直接提交给线程池执行并返回执行结果
         if (executor != null) {
             try {
                 executor.submit(new Runnable() {
                     @Override
                     public void run() {
                         try {
+                            //处理回调
                             responseFuture.executeInvokeCallback();
                         } catch (Throwable e) {
                             log.warn("execute callback in executor exception, and callback throw", e);
@@ -431,6 +439,8 @@ public abstract class NettyRemotingAbstract {
     /**
      * <p>
      * This method is periodically invoked to scan and expire deprecated request.
+     *
+     * 定期调用此方法来扫描和过期已弃用的请求。
      * </p>
      */
     public void scanResponseTable() {
@@ -440,6 +450,7 @@ public abstract class NettyRemotingAbstract {
             Entry<Integer, ResponseFuture> next = it.next();
             ResponseFuture rep = next.getValue();
 
+            //判断是否超时 超时将会移除
             if ((rep.getBeginTimestamp() + rep.getTimeoutMillis() + 1000) <= System.currentTimeMillis()) {
                 rep.release();
                 it.remove();
@@ -447,7 +458,7 @@ public abstract class NettyRemotingAbstract {
                 log.warn("remove timeout request, " + rep);
             }
         }
-
+        //批量处理 CallBack
         for (ResponseFuture rf : rfList) {
             try {
                 executeInvokeCallback(rf);
@@ -458,11 +469,11 @@ public abstract class NettyRemotingAbstract {
     }
 
     /**
-     * 向通道发送请求命令 使用netty进行远程通信
+     * 向通道发送请求命令 使用netty进行远程通信 使用 CountDownLatch实现等待返回结果  ， 同步发送消息
      *
      * @param channel
      * @param request
-     * @param timeoutMillis
+     * @param timeoutMillis 等待超时时间
      * @return
      * @throws InterruptedException
      * @throws RemotingSendRequestException
@@ -477,6 +488,7 @@ public abstract class NettyRemotingAbstract {
             final ResponseFuture responseFuture = new ResponseFuture(channel, opaque, timeoutMillis, null, null);
             this.responseTable.put(opaque, responseFuture);
             final SocketAddress addr = channel.remoteAddress();
+            //writeAndFlush发送消息 并 ddListener 注册监听器
             channel.writeAndFlush(request).addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture f) throws Exception {
@@ -493,7 +505,7 @@ public abstract class NettyRemotingAbstract {
                     log.warn("send a request command to channel <" + addr + "> failed.");//向通道发送请求命令
                 }
             });
-
+            // 人为 等待返回结果 其实使用的是  countDownLatch 这个countDownLatch是在初始化时候 赋值的 详细见 NettyRemotingAbstract#processMessageReceived方法
             RemotingCommand responseCommand = responseFuture.waitResponse(timeoutMillis);
             if (null == responseCommand) {
                 if (responseFuture.isSendRequestOK()) {
@@ -510,11 +522,47 @@ public abstract class NettyRemotingAbstract {
         }
     }
 
+    /**
+     *
+     * 在调用writeAndFlush(...)方法前，会先this.responseTable.put(opaque, responseFuture)方法，将responseFuture添加到responseTable中，这是个Map结构，rocketMq正是定时从responseTable中获取responseFuture并判断其状态来决定调用SendCallback的哪个方法的。
+     * 让我们回到NettyRemotingClient的启动流程，方法为NettyRemotingClient#start：
+     *
+     *
+     * public void start() {
+     *     ...
+     *     // 扫描消息获取结果，每秒执行1次
+     *     this.timer.scheduleAtFixedRate(new TimerTask() {
+     *         @Override
+     *         public void run() {
+     *             try {
+     *                 NettyRemotingClient.this.scanResponseTable();
+     *             } catch (Throwable e) {
+     *                 log.error("scanResponseTable exception", e);
+     *             }
+     *         }
+     *     }, 1000 * 3, 1000);
+     *     ...
+     * }
+     *
+     * 扫描后列表 并执行 executeInvokeCallback 方法
+     *
+     * 异步发送消息
+     *
+     * @param channel
+     * @param request
+     * @param timeoutMillis
+     * @param invokeCallback
+     * @throws InterruptedException
+     * @throws RemotingTooMuchRequestException
+     * @throws RemotingTimeoutException
+     * @throws RemotingSendRequestException
+     */
     public void invokeAsyncImpl(final Channel channel, final RemotingCommand request, final long timeoutMillis,
         final InvokeCallback invokeCallback)
         throws InterruptedException, RemotingTooMuchRequestException, RemotingTimeoutException, RemotingSendRequestException {
         long beginStartTime = System.currentTimeMillis();
         final int opaque = request.getOpaque();
+        // 获取锁  限制线程数量
         boolean acquired = this.semaphoreAsync.tryAcquire(timeoutMillis, TimeUnit.MILLISECONDS);
         if (acquired) {
             final SemaphoreReleaseOnlyOnce once = new SemaphoreReleaseOnlyOnce(this.semaphoreAsync);
@@ -527,10 +575,13 @@ public abstract class NettyRemotingAbstract {
             final ResponseFuture responseFuture = new ResponseFuture(channel, opaque, timeoutMillis - costTime, invokeCallback, once);
             this.responseTable.put(opaque, responseFuture);
             try {
-                channel.writeAndFlush(request).addListener(new ChannelFutureListener() {
+                // netty的异步操作 并添加监听器
+                channel.writeAndFlush(request)
+                        .addListener(new ChannelFutureListener() {
                     @Override
                     public void operationComplete(ChannelFuture f) throws Exception {
                         if (f.isSuccess()) {
+                            //发送成功后直接返回 通过定时任务返回发送的结果 定时任务在
                             responseFuture.setSendRequestOK(true);
                             return;
                         }

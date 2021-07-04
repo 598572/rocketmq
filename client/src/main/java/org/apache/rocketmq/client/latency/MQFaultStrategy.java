@@ -55,19 +55,28 @@ public class MQFaultStrategy {
         this.sendLatencyFaultEnable = sendLatencyFaultEnable;
     }
 
+    /**
+     * 选择一个 messageQueue 根据一定的算法 (其实是取模的方式 )
+     * @param tpInfo
+     * @param lastBrokerName
+     * @return
+     */
     public MessageQueue selectOneMessageQueue(final TopicPublishInfo tpInfo, final String lastBrokerName) {
         if (this.sendLatencyFaultEnable) {
             try {
                 int index = tpInfo.getSendWhichQueue().getAndIncrement();
+                // 获取一个可用的broker从列表中
                 for (int i = 0; i < tpInfo.getMessageQueueList().size(); i++) {
+                    // 取模运算  根据取模运算的规律，如果所有的MessageQueue所在的broker都无故障，则消息会均匀分布在各个队列上。
                     int pos = Math.abs(index++) % tpInfo.getMessageQueueList().size();
                     if (pos < 0)
                         pos = 0;
                     MessageQueue mq = tpInfo.getMessageQueueList().get(pos);
+                    // 如果mq所在broker可用，直接返回
                     if (latencyFaultTolerance.isAvailable(mq.getBrokerName()))
                         return mq;
                 }
-
+                // 经过上面的步骤还没找到 broker，从不可用的broker中获取一条记录，获取时同样使用取模处理
                 final String notBestBroker = latencyFaultTolerance.pickOneAtLeast();
                 int writeQueueNums = tpInfo.getQueueIdByBroker(notBestBroker);
                 if (writeQueueNums > 0) {

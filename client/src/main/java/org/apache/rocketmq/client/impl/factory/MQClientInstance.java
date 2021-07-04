@@ -221,25 +221,31 @@ public class MQClientInstance {
         return mqList;
     }
 
+    /**
+     * 启动一个实例
+     *
+     * @throws MQClientException
+     */
     public void start() throws MQClientException {
 
         synchronized (this) {
             switch (this.serviceState) {
                 case CREATE_JUST:
                     this.serviceState = ServiceState.START_FAILED;
-                    // If not specified,looking address from name server
+                    // If not specified,looking address from name server  如果未指定，则从nameServer查找地址
                     if (null == this.clientConfig.getNamesrvAddr()) {
                         this.mQClientAPIImpl.fetchNameServerAddr();
                     }
                     // Start request-response channel
+                    //开启netty channel通道 (netty客户端)  !!!!!!
                     this.mQClientAPIImpl.start();
-                    // Start various schedule tasks
+                    // Start various schedule tasks  启动各种定时任务 !!!!!!
                     this.startScheduledTask();
-                    // Start pull service
+                    // Start pull service  启动拉取服务  仅对consumer启作用
                     this.pullMessageService.start();
-                    // Start rebalance service
+                    // Start rebalance service  启动负载均衡服务 仅对consumer启作用
                     this.rebalanceService.start();
-                    // Start push service
+                    // Start push service   启动发送服务 defaultMQProducer 启动 !!!!!!!
                     this.defaultMQProducer.getDefaultMQProducerImpl().start(false);
                     log.info("the client factory [{}] start OK", this.clientId);
                     this.serviceState = ServiceState.RUNNING;
@@ -252,8 +258,13 @@ public class MQClientInstance {
         }
     }
 
+    /**
+     * 开启几个定时任务 例如 : 定时刷新nameServer; 定时刷新路由信息 从 NameServer; 定时发送心跳信息 ; 定时 持久化消息生产者的消费偏移量
+     *
+     */
     private void startScheduledTask() {
         if (null == this.clientConfig.getNamesrvAddr()) {
+            // 定时获取 nameServer 的地址
             this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
                 @Override
@@ -266,7 +277,7 @@ public class MQClientInstance {
                 }
             }, 1000 * 10, 1000 * 60 * 2, TimeUnit.MILLISECONDS);
         }
-
+        // 定时更新topic的路由信息 从NameServer
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -279,6 +290,7 @@ public class MQClientInstance {
             }
         }, 10, this.clientConfig.getPollNameServerInterval(), TimeUnit.MILLISECONDS);
 
+        // 定时发送心跳信息
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -292,6 +304,7 @@ public class MQClientInstance {
             }
         }, 1000, this.clientConfig.getHeartbeatBrokerInterval(), TimeUnit.MILLISECONDS);
 
+        // 持久化消息生产者的消费偏移量，可以放在本地文件，也可以推送到 broker
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -602,6 +615,14 @@ public class MQClientInstance {
         }
     }
 
+    /**
+     * 请求路由信息 向 nameServer 请求码为 :  RequestCode.GET_ROUTEINFO_BY_TOPIC
+     *
+     * @param topic
+     * @param isDefault
+     * @param defaultMQProducer
+     * @return
+     */
     public boolean updateTopicRouteInfoFromNameServer(final String topic, boolean isDefault,
         DefaultMQProducer defaultMQProducer) {
         try {

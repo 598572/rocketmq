@@ -66,7 +66,7 @@ public class SendMessageTraceHookImpl implements SendMessageHook {
 
     @Override
     public void sendMessageAfter(SendMessageContext context) {
-        //if it is message trace data,then it doesn't recorded
+        //if it is message trace data,then it doesn't recorded 如果是消息跟踪数据，则不记录
         if (context == null || context.getMessage().getTopic().startsWith(((AsyncTraceDispatcher) localDispatcher).getTraceTopicName())
             || context.getMqTraceContext() == null) {
             return;

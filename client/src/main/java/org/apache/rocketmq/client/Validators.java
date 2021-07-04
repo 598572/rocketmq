@@ -78,13 +78,22 @@ public class Validators {
         return matcher.matches();
     }
 
+    /**
+     * topic 最大长度 127字符
+     * body最大长度 4M
+     *
+     * @param msg
+     * @param defaultMQProducer
+     * @throws MQClientException
+     */
     public static void checkMessage(Message msg, DefaultMQProducer defaultMQProducer)
         throws MQClientException {
         if (null == msg) {
             throw new MQClientException(ResponseCode.MESSAGE_ILLEGAL, "the message is null");
         }
-        // topic
+        // topic 校验topic  TOPIC最大长度 127字符
         Validators.checkTopic(msg.getTopic());
+        // SCHEDULE_TOPIC_XXXX 包含topic 的话 会禁止发送
         Validators.isNotAllowedSendTopic(msg.getTopic());
 
         // body
@@ -95,7 +104,7 @@ public class Validators {
         if (0 == msg.getBody().length) {
             throw new MQClientException(ResponseCode.MESSAGE_ILLEGAL, "the message body length is zero");
         }
-
+        // 允许的最大消息大小（以字节为单位）。4M
         if (msg.getBody().length > defaultMQProducer.getMaxMessageSize()) {
             throw new MQClientException(ResponseCode.MESSAGE_ILLEGAL,
                 "the message body size over max value, MAX: " + defaultMQProducer.getMaxMessageSize());
