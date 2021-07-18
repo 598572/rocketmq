@@ -208,10 +208,14 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
 
         prepareSharableHandlers();
 
+        //研究过netty后 就对这个类中的方法更了解了
+        //其中 eventLoopGroupBoss 用于接受客户端连接，eventLoopGroupSelector 在接受到客户端连接之后，将连接交给workerGroup来进行处理。
         ServerBootstrap childHandler =
             this.serverBootstrap.group(this.eventLoopGroupBoss, this.eventLoopGroupSelector)
+                    //注册通道 这是netty中表示服务端的类，用于接受客户端连接，对应于java.nio包中的ServerSocketChannel。默认useEpoll是false
                 .channel(useEpoll() ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
-                .option(ChannelOption.SO_BACKLOG, 1024)
+                //绑定几种操作类型
+                    .option(ChannelOption.SO_BACKLOG, 1024)
                 .option(ChannelOption.SO_REUSEADDR, true)
                 .option(ChannelOption.SO_KEEPALIVE, false)
                 .childOption(ChannelOption.TCP_NODELAY, true)
@@ -219,14 +223,15 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                 .childOption(ChannelOption.SO_RCVBUF, nettyServerConfig.getServerSocketRcvBufSize())
                     //监听端口
                 .localAddress(new InetSocketAddress(this.nettyServerConfig.getListenPort()))
-                .childHandler(new ChannelInitializer<SocketChannel>() {
+                //配置处理器 处理客户端发来的请求
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     public void initChannel(SocketChannel ch) throws Exception {
                         ch.pipeline()
                             .addLast(defaultEventExecutorGroup, HANDSHAKE_HANDLER_NAME, handshakeHandler)
                             .addLast(defaultEventExecutorGroup,
                                 encoder,
-                                new NettyDecoder(),
+                                new NettyDecoder(),//编解码
                                 new IdleStateHandler(0, 0, nettyServerConfig.getServerChannelMaxIdleTimeSeconds()),
                                 connectionManageHandler,
                                 //netty用来处理连接事件与读写事件的线程 看到broker的启动流程后 发现他也是调用了本方法 哈哈
@@ -243,7 +248,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
          *
          * 这里的ChannelInitializer 来初始化 ChannelHandler， ChannelHandler 作用： 处理broker注册消息 producer/consumer 生产/消费 消息
          */
-
+        //是否使用堆分配空间
         if (nettyServerConfig.isServerPooledByteBufAllocatorEnable()) {
             childHandler.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
         }

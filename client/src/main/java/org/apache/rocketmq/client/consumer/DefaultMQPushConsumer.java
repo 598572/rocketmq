@@ -72,6 +72,8 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
     /**
      * Consumers of the same role is required to have exactly same subscriptions and consumerGroup to correctly achieve
      * load balance. It's required and needs to be globally unique.
+     *
+     * 要求相同角色的消费者具有完全相同的订阅和消费者组才能正确实现负载平衡。它是必需的，并且必须是全球唯一的。
      * </p>
      *
      * See <a href="http://rocketmq.apache.org/docs/core-concept/">here</a> for further discussion.
@@ -80,6 +82,8 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
 
     /**
      * Message model defines the way how messages are delivered to each consumer clients.
+     *
+     * 消息模型定义了消息如何传递给每个消费者客户端的方式。
      * </p>
      *
      * RocketMQ supports two message models: clustering and broadcasting. If clustering is set, consumer clients with
@@ -88,7 +92,13 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
      * separately.
      * </p>
      *
+     * RocketMQ 支持两种消息模型：集群和广播。如果设置了集群，具有相同{@link consumerGroup}的消费者客户端只会消耗订阅的消息的分片，
+     * 达到负载均衡；反之，如果设置了广播，则每个消费者客户端将分别消费所有订阅的消息。
+     *
      * This field defaults to clustering.
+     *
+     * 该字段默认为集群
+     *
      */
     private MessageModel messageModel = MessageModel.CLUSTERING;
 
@@ -102,15 +112,20 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
      * <code>CONSUME_FROM_LAST_OFFSET</code>: consumer clients pick up where it stopped previously.
      * If it were a newly booting up consumer client, according aging of the consumer group, there are two
      * cases:
+     * 消费者客户从之前停止的地方开始。如果是刚启动的消费客户端，根据消费群体的老化程度，有两种情况：
      * <ol>
      * <li>
      * if the consumer group is created so recently that the earliest message being subscribed has yet
      * expired, which means the consumer group represents a lately launched business, consuming will
      * start from the very beginning;
+     *
+     * 如果消费者组是最近创建的，以至于最早订阅的消息还没有过期，这意味着消费者组代表的是最近启动的业务，那么消费将从头开始；
      * </li>
      * <li>
      * if the earliest message being subscribed has expired, consuming will start from the latest
      * messages, meaning messages born prior to the booting timestamp would be ignored.
+     *
+     * 如果最早订阅的消息已过期，则消费将从最新消息开始，这意味着在启动时间戳之前生成的消息将被忽略。
      * </li>
      * </ol>
      * </li>
@@ -217,6 +232,8 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
 
     /**
      * Batch consumption size
+     *
+     * 批量消费size
      */
     private int consumeMessageBatchMaxSize = 1;
 
@@ -273,6 +290,8 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
 
     /**
      * Constructor specifying consumer group.
+     *
+     * 指定消费者组的构造函数。
      *
      * @param consumerGroup Consumer group.
      */
@@ -690,12 +709,15 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
     /**
      * This method gets internal infrastructure readily to serve. Instances must call this method after configuration.
      *
+     * 这种方法使内部基础设施易于服务。实例必须在配置后调用此方法。
+     *
      * @throws MQClientException if there is any client error.
      */
     @Override
     public void start() throws MQClientException {
         setConsumerGroup(NamespaceUtil.wrapNamespace(this.getNamespace(), this.consumerGroup));
         this.defaultMQPushConsumerImpl.start();
+        // 消息轨迹相关的东西
         if (null != traceDispatcher) {
             try {
                 traceDispatcher.start(this.getNamesrvAddr(), this.getAccessChannel());

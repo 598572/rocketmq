@@ -222,7 +222,7 @@ public class MQClientInstance {
     }
 
     /**
-     * 启动一个实例
+     * 启动一个客户端(消息消费者)、消息生产者都是在这里创建的 !!!!!!!!!!!!!!!!
      *
      * @throws MQClientException
      */

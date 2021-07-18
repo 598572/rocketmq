@@ -69,6 +69,8 @@ import org.apache.rocketmq.remoting.exception.RemotingException;
 /**
  * This class will be removed in 2022, and a better implementation {@link DefaultLitePullConsumerImpl} is recommend to use
  * in the scenario of actively pulling messages.
+ *
+ * 2022年将移除该类，推荐在主动拉取消息的场景下使用更好的实现{@link DefaultLitePullConsumerImpl}。
  */
 @Deprecated
 public class DefaultMQPullConsumerImpl implements MQConsumerInner {
@@ -621,19 +623,25 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
         }
     }
 
+    /**
+     * 启东一个consumer
+     *
+     * @throws MQClientException
+     */
     public synchronized void start() throws MQClientException {
         switch (this.serviceState) {
+            //判断服务状态
             case CREATE_JUST:
                 this.serviceState = ServiceState.START_FAILED;
 
                 this.checkConfig();
 
                 this.copySubscription();
-
+                //消费默认为集群模式
                 if (this.defaultMQPullConsumer.getMessageModel() == MessageModel.CLUSTERING) {
                     this.defaultMQPullConsumer.changeInstanceNameToPID();
                 }
-
+                //创建或者获取一个mQClientFactory
                 this.mQClientFactory = MQClientManager.getInstance().getOrCreateMQClientInstance(this.defaultMQPullConsumer, this.rpcHook);
 
                 this.rebalanceImpl.setConsumerGroup(this.defaultMQPullConsumer.getConsumerGroup());
@@ -672,7 +680,7 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
                         + "] has been created before, specify another name please." + FAQUrl.suggestTodo(FAQUrl.GROUP_NAME_DUPLICATE_URL),
                         null);
                 }
-
+                //启动消费服务
                 mQClientFactory.start();
                 log.info("the consumer [{}] start OK", this.defaultMQPullConsumer.getConsumerGroup());
                 this.serviceState = ServiceState.RUNNING;

@@ -296,6 +296,12 @@ public class ProcessQueue {
         }
     }
 
+    /**
+     * 从treeMap中取出msg 并添加到集合中去 这就是顺序消息消费的核心吧 我理解
+     *
+     * @param batchSize
+     * @return
+     */
     public List<MessageExt> takeMessages(final int batchSize) {
         List<MessageExt> result = new ArrayList<MessageExt>(batchSize);
         final long now = System.currentTimeMillis();

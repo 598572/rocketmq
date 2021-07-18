@@ -739,6 +739,24 @@ public class MQClientAPIImpl {
         return sendResult;
     }
 
+    /**
+     * 与发送消息一样，rocketMq拉取消息的模式也有三种：
+     *
+     * ONEWAY：什么也不做，直接返回null
+     * ASYNC：异步方式，拉取成功或失败后，会在pullCallback对象中处理回调信息
+     * SYNC：同步方式，拉取的消息同步返回
+     *
+     *
+     * @param addr
+     * @param requestHeader
+     * @param timeoutMillis
+     * @param communicationMode
+     * @param pullCallback
+     * @return
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public PullResult pullMessage(
         final String addr,
         final PullMessageRequestHeader requestHeader,
@@ -746,13 +764,15 @@ public class MQClientAPIImpl {
         final CommunicationMode communicationMode,
         final PullCallback pullCallback
     ) throws RemotingException, MQBrokerException, InterruptedException {
+        // 请求code为PULL_MESSAGE
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.PULL_MESSAGE, requestHeader);
-
+        // 拉取数据的几种方式
         switch (communicationMode) {
             case ONEWAY:
                 assert false;
                 return null;
             case ASYNC:
+                // 异步调用的是 pullCallback 处理 这里主要看的是异步拉取的源码
                 this.pullMessageAsync(addr, request, timeoutMillis, pullCallback);
                 return null;
             case SYNC:
@@ -765,25 +785,46 @@ public class MQClientAPIImpl {
         return null;
     }
 
+    /**
+     * 这块的操作与producer发送异步消息的套路一模一样，调用的同样是remotingClient.invokeAsync(...)方法，
+     * 结果处理同样的是在InvokeCallback对象中。在InvokeCallback#operationComplete方法中，
+     * 成功时会调用调用 pullCallback 的 onSuccess(...) 方法，失败时则调用 pullCallback 的 onException(...) 方法，
+     * 接下来我们来看看pullCallback的内容。
+     *
+     *
+     * @param addr
+     * @param request
+     * @param timeoutMillis
+     * @param pullCallback
+     * @throws RemotingException
+     * @throws InterruptedException
+     */
     private void pullMessageAsync(
         final String addr,
         final RemotingCommand request,
         final long timeoutMillis,
         final PullCallback pullCallback
     ) throws RemotingException, InterruptedException {
+        //异步拉取消息 使用 NettyRemotingClient
         this.remotingClient.invokeAsync(addr, request, timeoutMillis, new InvokeCallback() {
+            //操作完成后 回调方法
             @Override
             public void operationComplete(ResponseFuture responseFuture) {
+                // 处理拉取消息的结果
                 RemotingCommand response = responseFuture.getResponseCommand();
+                // 有响应
                 if (response != null) {
                     try {
                         PullResult pullResult = MQClientAPIImpl.this.processPullResponse(response, addr);
                         assert pullResult != null;
+                        // 调用 pullCallback 的 onSuccess(...) 方法
                         pullCallback.onSuccess(pullResult);
                     } catch (Exception e) {
+                        // 调用 pullCallback 的 onException(...) 方法
                         pullCallback.onException(e);
                     }
                 } else {
+                    //无响应 走到异常处理方法  pullCallback.onException(e);
                     if (!responseFuture.isSendRequestOK()) {
                         pullCallback.onException(new MQClientException("send request failed to " + addr + ". Request: " + request, responseFuture.getCause()));
                     } else if (responseFuture.isTimeout()) {
