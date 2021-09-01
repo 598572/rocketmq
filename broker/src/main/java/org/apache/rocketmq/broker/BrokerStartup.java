@@ -52,7 +52,7 @@ public class BrokerStartup {
     public static Properties properties = null;
     public static CommandLine commandLine = null;
     public static String configFile = null;
-    public static InternalLogger log;
+    public static InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
 
     /**
      * broker启动入口

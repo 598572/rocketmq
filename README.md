@@ -1,3 +1,23 @@
+
+### 因为换了电脑，之前调试mq的环境需要重新搞一下，所以这里做个记录
+
+1. 下载rocketmq代码，导入idea
+
+2. nameServer 启动时候需要配置 ROCKETMQ_HOME 地址 ROCKETMQ_HOME=/Users/hzz/myself_project/rocketMQ_sourceCode/rocketmq/distribution
+
+![img_1.png](img_1.png)
+
+
+3. broker启动时候需要的配置如下:
+
+-n localhost:9876 autoCreateTopicEnable=true （开启自动创建topic的功能）
+<br>
+ROCKETMQ_HOME=/Users/hzz/myself_project/rocketMQ_sourceCode/rocketmq/distribution
+
+ok现在 你可以愉快的启动本地的rocketMQ进行源码阅读了。或者你也可以在自己项目中配置rocketmq地址 进行mq相关Api的单元测试与学习。
+
+![img.png](img.png)
+
 ## Apache RocketMQ 
 [![Build Status](https://travis-ci.org/apache/rocketmq.svg?branch=master)](https://travis-ci.org/apache/rocketmq) [![Coverage Status](https://coveralls.io/repos/github/apache/rocketmq/badge.svg?branch=master)](https://coveralls.io/github/apache/rocketmq?branch=master)
 [![CodeCov](https://codecov.io/gh/apache/rocketmq/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/rocketmq)
